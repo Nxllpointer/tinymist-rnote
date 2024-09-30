@@ -180,12 +180,21 @@ undocumented_unsafe_blocks = "warn"
 
 # tinymist-assets = { path = "./crates/tinymist-assets/" }
 
-typst = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.12.0" }
-typst-timing = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.12.0" }
-typst-svg = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.12.0" }
-typst-render = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.12.0" }
-typst-pdf = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.12.0" }
-typst-syntax = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.12.0" }
+typst = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
+typst-cli = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
+typst-ide = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
+typst-macros = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
+typst-pdf = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
+typst-render = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
+typst-svg = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
+typst-syntax = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
+typst-timing = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
+typst-utils = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
+reflexo = { git = "https://github.com/Nxllpointer/typst.ts.git", branch = "rnote-tinymist-v0.12.0" }
+reflexo-world = { git = "https://github.com/Nxllpointer/typst.ts.git", branch = "rnote-tinymist-v0.12.0" }
+reflexo-typst = { git = "https://github.com/Nxllpointer/typst.ts.git", branch = "rnote-tinymist-v0.12.0" }
+reflexo-vec2svg = { git = "https://github.com/Nxllpointer/typst.ts.git", branch = "rnote-tinymist-v0.12.0" }
+reflexo-typst-shim = { git = "https://github.com/Nxllpointer/typst.ts", branch = "rnote-tinymist-v0.12.0" }
 
 # typst = { path = "../typst/crates/typst" }
 # typst-timing = { path = "../typst/crates/typst-timing" }
@@ -206,3 +215,9 @@ typst-syntax = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tin
 # typst-ts-core = { path = "../typst.ts/core" }
 # typst-ts-compiler = { path = "../typst.ts/compiler" }
 # typstyle = { path = "../typstyle" }
+
+# Patches inherited from rnote
+piet = { git = "https://github.com/flxzt/piet", rev = "17fd59f260db3c54029a8288178e32f9f1742be2" }
+piet-cairo = { git = "https://github.com/flxzt/piet", rev = "17fd59f260db3c54029a8288178e32f9f1742be2" }
+roughr = { git = "https://github.com/orhanbalci/rough-rs", rev = "0701ce0b874061707ef726533b43e1806af8b666" }
+rough_piet = { git = "https://github.com/orhanbalci/rough-rs", rev = "0701ce0b874061707ef726533b43e1806af8b666" }
