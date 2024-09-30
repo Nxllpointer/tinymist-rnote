@@ -173,19 +173,46 @@ undocumented_unsafe_blocks = "warn"
 
 # tinymist-assets = { path = "./crates/tinymist-assets/" }
 
-typst = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.11.1-2" }
-typst-timing = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.11.1-2" }
-typst-svg = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.11.1-2" }
-typst-render = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.11.1-2" }
-typst-pdf = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.11.1-2" }
-typst-syntax = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.11.1-2" }
+# typst = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.11.1-2" }
+# typst-timing = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.11.1-2" }
+# typst-svg = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.11.1-2" }
+# typst-render = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.11.1-2" }
+# typst-pdf = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.11.1-2" }
+# typst-syntax = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.11.1-2" }
 
-# typst = { path = "../typst/crates/typst" }
-# typst-timing = { path = "../typst/crates/typst-timing" }
-# typst-svg = { path = "../typst/crates/typst-svg" }
-# typst-pdf = { path = "../typst/crates/typst-pdf" }
-# typst-render = { path = "../typst/crates/typst-render" }
-# typst-syntax = { path = "../typst/crates/typst-syntax" }
+# typst = { path = "../typst-rnote/crates/typst" }
+# typst-cli = { path = "../typst-rnote/crates/typst-cli" }
+# typst-ide = { path = "../typst-rnote/crates/typst-ide" }
+# typst-macros = { path = "../typst-rnote/crates/typst-macros" }
+# typst-pdf = { path = "../typst-rnote/crates/typst-pdf" }
+# typst-render = { path = "../typst-rnote/crates/typst-render" }
+# typst-svg = { path = "../typst-rnote/crates/typst-svg" }
+# typst-syntax = { path = "../typst-rnote/crates/typst-syntax" }
+# typst-timing = { path = "../typst-rnote/crates/typst-timing" }
+typst = { git = "https://github.com/Nxllpointer/typst-rnote.git", branch = "rnote-integration" }
+typst-cli = { git = "https://github.com/Nxllpointer/typst-rnote.git", branch = "rnote-integration" }
+typst-ide = { git = "https://github.com/Nxllpointer/typst-rnote.git", branch = "rnote-integration" }
+typst-macros = { git = "https://github.com/Nxllpointer/typst-rnote.git", branch = "rnote-integration" }
+typst-pdf = { git = "https://github.com/Nxllpointer/typst-rnote.git", branch = "rnote-integration" }
+typst-render = { git = "https://github.com/Nxllpointer/typst-rnote.git", branch = "rnote-integration" }
+typst-svg = { git = "https://github.com/Nxllpointer/typst-rnote.git", branch = "rnote-integration" }
+typst-syntax = { git = "https://github.com/Nxllpointer/typst-rnote.git", branch = "rnote-integration" }
+typst-timing = { git = "https://github.com/Nxllpointer/typst-rnote.git", branch = "rnote-integration" }
+
+# reflexo = { path = "../typst-ts-rnote/crates/reflexo" }
+# reflexo-world = { path = "../typst-ts-rnote/crates/reflexo-world" }
+# reflexo-typst = { path = "../typst-ts-rnote/crates/reflexo-typst" }
+# reflexo-vec2svg = { path = "../typst-ts-rnote/crates/conversion/vec2svg" }
+reflexo = { git = "https://github.com/Nxllpointer/typst-ts-rnote.git", branch = "rnote-integration" }
+reflexo-world = { git = "https://github.com/Nxllpointer/typst-ts-rnote.git", branch = "rnote-integration" }
+reflexo-typst = { git = "https://github.com/Nxllpointer/typst-ts-rnote.git", branch = "rnote-integration" }
+reflexo-vec2svg = { git = "https://github.com/Nxllpointer/typst-ts-rnote.git", branch = "rnote-integration" }
+
+# Patches inherited from rnote
+piet = { git = "https://github.com/flxzt/piet", rev = "17fd59f260db3c54029a8288178e32f9f1742be2" }
+piet-cairo = { git = "https://github.com/flxzt/piet", rev = "17fd59f260db3c54029a8288178e32f9f1742be2" }
+roughr = { git = "https://github.com/orhanbalci/rough-rs", rev = "0701ce0b874061707ef726533b43e1806af8b666" }
+rough_piet = { git = "https://github.com/orhanbalci/rough-rs", rev = "0701ce0b874061707ef726533b43e1806af8b666" }
 
 # typst-ts-svg-exporter = { git = "https://github.com/Myriad-Dreamin/typst.ts/", rev = "11b1ef0909ee6ded49eb84db999af14276125a62" }
 # reflexo = { git = "https://github.com/Myriad-Dreamin/typst.ts/", rev = "11b1ef0909ee6ded49eb84db999af14276125a62" }
