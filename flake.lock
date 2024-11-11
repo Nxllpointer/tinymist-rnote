@@ -142,16 +142,16 @@
         "systems": "systems"
       },
       "locked": {
-        "lastModified": 1728737877,
-        "narHash": "sha256-i6fjEj9YgI0AQmW9MrUlOTmjrlYiaHYILegxG4IjQJI=",
+        "lastModified": 1731094380,
+        "narHash": "sha256-dgKL/3qgwUQXgaxF32BwJk40DT8EXQiuwjb6FvbwzRI=",
         "owner": "Nxllpointer",
         "repo": "typst",
-        "rev": "a2a7f8d304b2f9f15f56d8428a78d06f9223c0a5",
+        "rev": "b37319dfd56211b17b2d8d80d36e320236f25674",
         "type": "github"
       },
       "original": {
         "owner": "Nxllpointer",
-        "ref": "rnote-tinymist-v0.11.33",
+        "ref": "rnote-tinymist-v0.12.0",
         "repo": "typst",
         "type": "github"
       }
