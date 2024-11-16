@@ -7,6 +7,7 @@
 
   outputs = {typst, ...}: let
     system = "x86_64-linux";
+    lib = typst.inputs.nixpkgs.lib;
     craneLib = typst.craneLib.${system};
     dependencies = typst.dependencies.${system};
 
@@ -28,7 +29,17 @@
     commonArgs =
       {
         pname = "tinymist";
-        src = ./.;
+        src = lib.fileset.toSource {
+          root = ./.;
+          fileset = lib.fileset.unions [
+            ./Cargo.toml
+            ./Cargo.lock
+            ./crates
+            ./tests
+            ./contrib
+          ];
+        };
+        doCheck = false;
       }
       // dependencies;
 
@@ -37,8 +48,6 @@
         overrideVendorGitCheckout = deps: drv: let
           parsedSource = parseSource deps;
         in
-          # builtins.trace "Git checkout: ${builtins.toString (builtins.map (d: (builtins.map (n: "${n}: ${builtins.getAttr n d}") (builtins.attrNames d))) deps)}"
-          # builtins.trace "${source} | ${url} | ${ref.url}"
           if isTypstTs parsedSource
           then
             builtins.trace "Patching typst.ts fetchGit!"
@@ -51,7 +60,7 @@
     tinymist = craneLib.buildPackage (commonArgs
       // {
         inherit cargoArtifacts cargoVendorDir;
-        doCheck = false;
+        cargoExtraArgs = "--bin tinymist";
       });
   in {
     packages.${system} = {
