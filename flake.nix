@@ -2,7 +2,7 @@
   description = "A very basic flake";
 
   inputs = {
-    typst.url = "github:Nxllpointer/typst?ref=rnote-tinymist-v0.12.0";
+    typst.url = "github:Nxllpointer/typst?ref=rnote";
   };
 
   outputs = { typst, ... }: let
