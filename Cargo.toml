@@ -180,21 +180,21 @@ undocumented_unsafe_blocks = "warn"
 
 # tinymist-assets = { path = "./crates/tinymist-assets/" }
 
-typst = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
-typst-cli = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
-typst-ide = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
-typst-macros = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
-typst-pdf = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
-typst-render = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
-typst-svg = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
-typst-syntax = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
-typst-timing = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
-typst-utils = { git = "https://github.com/Nxllpointer/typst.git", branch = "rnote-tinymist-v0.12.0" }
-reflexo = { git = "https://github.com/Nxllpointer/typst.ts.git", branch = "rnote-tinymist-v0.12.0" }
-reflexo-world = { git = "https://github.com/Nxllpointer/typst.ts.git", branch = "rnote-tinymist-v0.12.0" }
-reflexo-typst = { git = "https://github.com/Nxllpointer/typst.ts.git", branch = "rnote-tinymist-v0.12.0" }
-reflexo-vec2svg = { git = "https://github.com/Nxllpointer/typst.ts.git", branch = "rnote-tinymist-v0.12.0" }
-reflexo-typst-shim = { git = "https://github.com/Nxllpointer/typst.ts", branch = "rnote-tinymist-v0.12.0" }
+typst = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
+typst-cli = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
+typst-ide = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
+typst-macros = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
+typst-pdf = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
+typst-render = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
+typst-svg = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
+typst-syntax = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
+typst-timing = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
+typst-utils = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
+reflexo = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "295f47cff5291cc94fdaca99ce8565c98cde716d" }
+reflexo-world = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "295f47cff5291cc94fdaca99ce8565c98cde716d" }
+reflexo-typst = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "295f47cff5291cc94fdaca99ce8565c98cde716d" }
+reflexo-vec2svg = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "295f47cff5291cc94fdaca99ce8565c98cde716d" }
+reflexo-typst-shim = { git = "https://github.com/Nxllpointer/typst.ts", rev = "295f47cff5291cc94fdaca99ce8565c98cde716d" }
 
 # typst = { path = "../typst/crates/typst" }
 # typst-timing = { path = "../typst/crates/typst-timing" }

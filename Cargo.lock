@@ -170,6 +170,15 @@ checksum = "86fdf8605db99b54d3cd748a44c6d04df638eb5dafb219b135d0149bd0db01f6"
 
 [[package]]
 name = "approx"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f2a05fd1bd10b2527e20a2cd32d8873d115b8b39fe219ee25f42a8aca6ba278"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
+name = "approx"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cab112f0a86d568ea0e627cc1d6be74a1e9cd55214684db5561995f6dad897c6"
@@ -617,6 +626,16 @@ name = "cfg-if"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
+
+[[package]]
+name = "cgmath"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a98d30140e3296250832bbaaff83b27dcd6fa3cc70fb6f1f3e5c9c0023b5317"
+dependencies = [
+ "approx 0.4.0",
+ "num-traits",
+]
 
 [[package]]
 name = "chinese-number"
@@ -1600,6 +1619,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "fontdb"
+version = "0.22.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a3a6f9af55fb97ad673fb7a69533eb2f967648a06fa21f8c9bb2cd6d33975716"
+dependencies = [
+ "fontconfig-parser",
+ "log",
+ "memmap2",
+ "slotmap",
+ "tinyvec",
+ "ttf-parser 0.24.1",
+]
+
+[[package]]
 name = "foreign-types"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1758,14 +1791,15 @@ dependencies = [
 
 [[package]]
 name = "geo"
-version = "0.28.0"
+version = "0.29.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f811f663912a69249fa620dcd2a005db7254529da2d8a0b23942e81f47084501"
+checksum = "8798f09c0fb3625cf216569408e151a1884c3a028a0b533b7c223ae8f695c89a"
 dependencies = [
  "earcutr",
  "float_next_after",
  "geo-types",
  "geographiclib-rs",
+ "i_overlay",
  "log",
  "num-traits",
  "robust",
@@ -1779,7 +1813,7 @@ version = "0.7.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9ff16065e5720f376fbced200a5ae0f47ace85fd70b7e54269790281353b6d61"
 dependencies = [
- "approx",
+ "approx 0.5.1",
  "num-traits",
  "rstar",
  "serde",
@@ -2295,6 +2329,50 @@ name = "hypher"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3b24ad5637230df201ab1034d593f1d09bf7f2a9274f2e8897638078579f4265"
+
+[[package]]
+name = "i_float"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3123eb991f76125b7c1a9e789f41b8daf9176cf24f305a661f92ed997c4d296"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "i_key_sort"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "347c253b4748a1a28baf94c9ce133b6b166f08573157e05afe718812bc599fcd"
+
+[[package]]
+name = "i_overlay"
+version = "1.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cb99cdd47a793c9f1070e9ead234d805d1d1232f9e827ac91db46196d6dfb0a"
+dependencies = [
+ "i_float",
+ "i_key_sort",
+ "i_shape",
+ "i_tree",
+ "rayon",
+]
+
+[[package]]
+name = "i_shape"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0be74a9b2c283db7cfd364aabd45b3db3d789d740cb6005f297736413d857f98"
+dependencies = [
+ "i_float",
+ "serde",
+]
+
+[[package]]
+name = "i_tree"
+version = "0.8.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "155181bc97d770181cf9477da51218a19ee92a8e5be642e796661aee2b601139"
 
 [[package]]
 name = "iana-time-zone"
@@ -3173,7 +3251,7 @@ version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3c4b5f057b303842cf3262c27e465f4c303572e7f6b0648f60e16248ac3397f4"
 dependencies = [
- "approx",
+ "approx 0.5.1",
  "matrixmultiply",
  "nalgebra-macros",
  "num-complex",
@@ -3547,7 +3625,7 @@ version = "0.7.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4cbf71184cc5ecc2e4e1baccdb21026c20e5fc3dcf63028a086131b3ab00b6e6"
 dependencies = [
- "approx",
+ "approx 0.5.1",
  "fast-srgb8",
  "libm",
  "palette_derive",
@@ -3645,7 +3723,7 @@ version = "0.17.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9ef77dcfb95073cf0fb746ae2ba87a747d0bc3eaf3c3fd207a53af5f33fb642"
 dependencies = [
- "approx",
+ "approx 0.5.1",
  "arrayvec 0.7.6",
  "bitflags 2.6.0",
  "downcast-rs",
@@ -3798,8 +3876,9 @@ checksum = "5be167a7af36ee22fe3115051bc51f6e6c7054c9348e28deb4f49bd6f705a315"
 
 [[package]]
 name = "piet"
-version = "0.6.2"
-source = "git+https://github.com/flxzt/piet?rev=17fd59f260db3c54029a8288178e32f9f1742be2#17fd59f260db3c54029a8288178e32f9f1742be2"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5139c7ec7de4cc21d108484af288b9c335b731194218023acf8b02874ed2b25e"
 dependencies = [
  "kurbo 0.11.1",
  "unic-bidi",
@@ -3807,8 +3886,9 @@ dependencies = [
 
 [[package]]
 name = "piet-cairo"
-version = "0.6.2"
-source = "git+https://github.com/flxzt/piet?rev=17fd59f260db3c54029a8288178e32f9f1742be2#17fd59f260db3c54029a8288178e32f9f1742be2"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9612bb8fdcd109ba7ce490777c79ef1bcbdb7f046b4a0e7fe449a42e51cda3e1"
 dependencies = [
  "cairo-rs",
  "pango",
@@ -3873,8 +3953,9 @@ dependencies = [
 
 [[package]]
 name = "points_on_curve"
-version = "0.5.0"
-source = "git+https://github.com/orhanbalci/rough-rs?rev=0701ce0b874061707ef726533b43e1806af8b666#0701ce0b874061707ef726533b43e1806af8b666"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca77ae128f56aad518f82cf0af3dcda13b874e59a608dbb287c7887fec97b505"
 dependencies = [
  "euclid",
  "num-traits",
@@ -4293,7 +4374,7 @@ dependencies = [
 [[package]]
 name = "reflexo"
 version = "0.5.0-rc8"
-source = "git+https://github.com/Nxllpointer/typst.ts.git?branch=rnote-tinymist-v0.12.0#ed770e02ac416c746c525d892f2eb56ceb5500e8"
+source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=295f47cff5291cc94fdaca99ce8565c98cde716d#295f47cff5291cc94fdaca99ce8565c98cde716d"
 dependencies = [
  "base64 0.22.1",
  "bitvec",
@@ -4318,7 +4399,7 @@ dependencies = [
 [[package]]
 name = "reflexo-typst"
 version = "0.5.0-rc8"
-source = "git+https://github.com/Nxllpointer/typst.ts.git?branch=rnote-tinymist-v0.12.0#ed770e02ac416c746c525d892f2eb56ceb5500e8"
+source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=295f47cff5291cc94fdaca99ce8565c98cde716d#295f47cff5291cc94fdaca99ce8565c98cde716d"
 dependencies = [
  "codespan-reporting",
  "comemo 0.4.0",
@@ -4346,7 +4427,7 @@ dependencies = [
 [[package]]
 name = "reflexo-typst-shim"
 version = "0.5.0-rc8"
-source = "git+https://github.com/Nxllpointer/typst.ts.git?branch=rnote-tinymist-v0.12.0#ed770e02ac416c746c525d892f2eb56ceb5500e8"
+source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=295f47cff5291cc94fdaca99ce8565c98cde716d#295f47cff5291cc94fdaca99ce8565c98cde716d"
 dependencies = [
  "cfg-if",
  "typst",
@@ -4356,7 +4437,7 @@ dependencies = [
 [[package]]
 name = "reflexo-typst2vec"
 version = "0.5.0-rc8"
-source = "git+https://github.com/Nxllpointer/typst.ts.git?branch=rnote-tinymist-v0.12.0#ed770e02ac416c746c525d892f2eb56ceb5500e8"
+source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=295f47cff5291cc94fdaca99ce8565c98cde716d#295f47cff5291cc94fdaca99ce8565c98cde716d"
 dependencies = [
  "bitvec",
  "comemo 0.4.0",
@@ -4381,7 +4462,7 @@ dependencies = [
 [[package]]
 name = "reflexo-vec2svg"
 version = "0.5.0-rc8"
-source = "git+https://github.com/Nxllpointer/typst.ts.git?branch=rnote-tinymist-v0.12.0#ed770e02ac416c746c525d892f2eb56ceb5500e8"
+source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=295f47cff5291cc94fdaca99ce8565c98cde716d#295f47cff5291cc94fdaca99ce8565c98cde716d"
 dependencies = [
  "base64 0.22.1",
  "comemo 0.4.0",
@@ -4394,7 +4475,7 @@ dependencies = [
 [[package]]
 name = "reflexo-vfs"
 version = "0.5.0-rc8"
-source = "git+https://github.com/Nxllpointer/typst.ts.git?branch=rnote-tinymist-v0.12.0#ed770e02ac416c746c525d892f2eb56ceb5500e8"
+source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=295f47cff5291cc94fdaca99ce8565c98cde716d#295f47cff5291cc94fdaca99ce8565c98cde716d"
 dependencies = [
  "indexmap 2.5.0",
  "log",
@@ -4408,7 +4489,7 @@ dependencies = [
 [[package]]
 name = "reflexo-world"
 version = "0.5.0-rc8"
-source = "git+https://github.com/Nxllpointer/typst.ts.git?branch=rnote-tinymist-v0.12.0#ed770e02ac416c746c525d892f2eb56ceb5500e8"
+source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=295f47cff5291cc94fdaca99ce8565c98cde716d#295f47cff5291cc94fdaca99ce8565c98cde716d"
 dependencies = [
  "chrono",
  "codespan-reporting",
@@ -4416,7 +4497,7 @@ dependencies = [
  "dirs",
  "ecow 0.2.2",
  "flate2",
- "fontdb",
+ "fontdb 0.21.0",
  "hex",
  "log",
  "parking_lot",
@@ -4576,7 +4657,7 @@ dependencies = [
  "rgb",
  "svgtypes 0.15.2",
  "tiny-skia",
- "usvg",
+ "usvg 0.43.0",
  "zune-jpeg",
 ]
 
@@ -4636,10 +4717,10 @@ dependencies = [
 [[package]]
 name = "rnote-compose"
 version = "0.11.0"
-source = "git+https://github.com/flxzt/rnote.git#f20775cab7bddacbc2086cbda0b4424b4634c140"
+source = "git+https://github.com/flxzt/rnote.git?rev=97f9fd07261559b2065a4329c50118d073548cbb#97f9fd07261559b2065a4329c50118d073548cbb"
 dependencies = [
  "anyhow",
- "approx",
+ "approx 0.5.1",
  "base64 0.22.1",
  "ink-stroke-modeler-rs",
  "kurbo 0.11.1",
@@ -4665,10 +4746,10 @@ dependencies = [
 [[package]]
 name = "rnote-engine"
 version = "0.11.0"
-source = "git+https://github.com/flxzt/rnote.git#f20775cab7bddacbc2086cbda0b4424b4634c140"
+source = "git+https://github.com/flxzt/rnote.git?rev=97f9fd07261559b2065a4329c50118d073548cbb#97f9fd07261559b2065a4329c50118d073548cbb"
 dependencies = [
  "anyhow",
- "approx",
+ "approx 0.5.1",
  "base64 0.22.1",
  "cairo-rs",
  "chrono",
@@ -4709,7 +4790,7 @@ dependencies = [
  "thiserror",
  "tracing",
  "unicode-segmentation",
- "usvg",
+ "usvg 0.44.0",
  "xmlwriter",
 ]
 
@@ -4738,8 +4819,9 @@ checksum = "88f8660c1ff60292143c98d08fc6e2f654d722db50410e3f3797d40baaf9d8f3"
 
 [[package]]
 name = "rough_piet"
-version = "0.6.0"
-source = "git+https://github.com/orhanbalci/rough-rs?rev=0701ce0b874061707ef726533b43e1806af8b666#0701ce0b874061707ef726533b43e1806af8b666"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "466429ea5839b922daedf3fd4e7afc2fc200003d1d559b63b9701b6a5a676f29"
 dependencies = [
  "euclid",
  "num-traits",
@@ -4750,8 +4832,9 @@ dependencies = [
 
 [[package]]
 name = "roughr"
-version = "0.6.0"
-source = "git+https://github.com/orhanbalci/rough-rs?rev=0701ce0b874061707ef726533b43e1806af8b666#0701ce0b874061707ef726533b43e1806af8b666"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97ac37fe25fabfc2d26a7128dc5c6ab0c9d763e3eed5ea8e32bc8619386852d3"
 dependencies = [
  "derive_builder",
  "euclid",
@@ -5222,7 +5305,7 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b3a386a501cd104797982c15ae17aafe8b9261315b5d07e3ec803f2ea26be0fa"
 dependencies = [
- "approx",
+ "approx 0.5.1",
  "num-complex",
  "num-traits",
  "paste",
@@ -5446,9 +5529,9 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
 name = "svg"
-version = "0.17.0"
+version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "700efb40f3f559c23c18b446e8ed62b08b56b2bb3197b36d57e0470b4102779e"
+checksum = "94afda9cd163c04f6bee8b4bf2501c91548deae308373c436f36aeff3cf3c4a3"
 
 [[package]]
 name = "svg2pdf"
@@ -5456,7 +5539,7 @@ version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5014c9dadcf318fb7ef8c16438e95abcc9de1ae24d60d5bccc64c55100c50364"
 dependencies = [
- "fontdb",
+ "fontdb 0.21.0",
  "image",
  "log",
  "miniz_oxide 0.8.0",
@@ -5467,14 +5550,16 @@ dependencies = [
  "subsetter",
  "tiny-skia",
  "ttf-parser 0.24.1",
- "usvg",
+ "usvg 0.43.0",
 ]
 
 [[package]]
 name = "svg_path_ops"
-version = "0.5.0"
-source = "git+https://github.com/orhanbalci/rough-rs?rev=0701ce0b874061707ef726533b43e1806af8b666#0701ce0b874061707ef726533b43e1806af8b666"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e57ed40fbb822d8dd1cc17e6b452ee2ec007c51f58c8bceff75f547df0e12a0a"
 dependencies = [
+ "cgmath",
  "svgtypes 0.11.0",
 ]
 
@@ -6400,7 +6485,7 @@ dependencies = [
 [[package]]
 name = "typst"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?branch=rnote-tinymist-v0.12.0#b37319dfd56211b17b2d8d80d36e320236f25674"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
 dependencies = [
  "arrayvec 0.7.6",
  "az",
@@ -6412,7 +6497,7 @@ dependencies = [
  "csv",
  "ecow 0.2.2",
  "flate2",
- "fontdb",
+ "fontdb 0.21.0",
  "hayagriva",
  "hypher",
  "icu_properties",
@@ -6462,7 +6547,7 @@ dependencies = [
  "unicode-script",
  "unicode-segmentation",
  "unscanny",
- "usvg",
+ "usvg 0.43.0",
  "wasmi",
  "xmlwriter",
 ]
@@ -6491,7 +6576,7 @@ checksum = "4fe00da1b24da2c4a7da532fc33d0c3bd43a902ca4c408ee2c36eabe70f2f4ba"
 [[package]]
 name = "typst-macros"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?branch=rnote-tinymist-v0.12.0#b37319dfd56211b17b2d8d80d36e320236f25674"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -6502,7 +6587,7 @@ dependencies = [
 [[package]]
 name = "typst-pdf"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?branch=rnote-tinymist-v0.12.0#b37319dfd56211b17b2d8d80d36e320236f25674"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
 dependencies = [
  "arrayvec 0.7.6",
  "base64 0.22.1",
@@ -6550,7 +6635,7 @@ dependencies = [
 [[package]]
 name = "typst-render"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?branch=rnote-tinymist-v0.12.0#b37319dfd56211b17b2d8d80d36e320236f25674"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
 dependencies = [
  "bytemuck",
  "comemo 0.4.0",
@@ -6563,7 +6648,7 @@ dependencies = [
  "typst",
  "typst-macros",
  "typst-timing",
- "usvg",
+ "usvg 0.43.0",
 ]
 
 [[package]]
@@ -6578,7 +6663,7 @@ dependencies = [
 [[package]]
 name = "typst-svg"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?branch=rnote-tinymist-v0.12.0#b37319dfd56211b17b2d8d80d36e320236f25674"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
 dependencies = [
  "base64 0.22.1",
  "comemo 0.4.0",
@@ -6628,7 +6713,7 @@ dependencies = [
 [[package]]
 name = "typst-syntax"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?branch=rnote-tinymist-v0.12.0#b37319dfd56211b17b2d8d80d36e320236f25674"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
 dependencies = [
  "ecow 0.2.2",
  "once_cell",
@@ -6645,7 +6730,7 @@ dependencies = [
 [[package]]
 name = "typst-timing"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?branch=rnote-tinymist-v0.12.0#b37319dfd56211b17b2d8d80d36e320236f25674"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
 dependencies = [
  "parking_lot",
  "serde",
@@ -6656,7 +6741,7 @@ dependencies = [
 [[package]]
 name = "typst-utils"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?branch=rnote-tinymist-v0.12.0#b37319dfd56211b17b2d8d80d36e320236f25674"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
 dependencies = [
  "once_cell",
  "portable-atomic",
@@ -6880,7 +6965,34 @@ dependencies = [
  "base64 0.22.1",
  "data-url",
  "flate2",
- "fontdb",
+ "fontdb 0.21.0",
+ "imagesize",
+ "kurbo 0.11.1",
+ "log",
+ "pico-args",
+ "roxmltree",
+ "rustybuzz",
+ "simplecss",
+ "siphasher 1.0.1",
+ "strict-num",
+ "svgtypes 0.15.2",
+ "tiny-skia-path",
+ "unicode-bidi",
+ "unicode-script",
+ "unicode-vo",
+ "xmlwriter",
+]
+
+[[package]]
+name = "usvg"
+version = "0.44.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7447e703d7223b067607655e625e0dbca80822880248937da65966194c4864e6"
+dependencies = [
+ "base64 0.22.1",
+ "data-url",
+ "flate2",
+ "fontdb 0.22.0",
  "imagesize",
  "kurbo 0.11.1",
  "log",
@@ -7702,11 +7814,31 @@ dependencies = [
 ]
 
 [[patch.unused]]
+name = "piet"
+version = "0.6.2"
+source = "git+https://github.com/flxzt/piet?rev=17fd59f260db3c54029a8288178e32f9f1742be2#17fd59f260db3c54029a8288178e32f9f1742be2"
+
+[[patch.unused]]
+name = "piet-cairo"
+version = "0.6.2"
+source = "git+https://github.com/flxzt/piet?rev=17fd59f260db3c54029a8288178e32f9f1742be2#17fd59f260db3c54029a8288178e32f9f1742be2"
+
+[[patch.unused]]
+name = "rough_piet"
+version = "0.6.0"
+source = "git+https://github.com/orhanbalci/rough-rs?rev=0701ce0b874061707ef726533b43e1806af8b666#0701ce0b874061707ef726533b43e1806af8b666"
+
+[[patch.unused]]
+name = "roughr"
+version = "0.6.0"
+source = "git+https://github.com/orhanbalci/rough-rs?rev=0701ce0b874061707ef726533b43e1806af8b666#0701ce0b874061707ef726533b43e1806af8b666"
+
+[[patch.unused]]
 name = "typst-cli"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?branch=rnote-tinymist-v0.12.0#b37319dfd56211b17b2d8d80d36e320236f25674"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
 
 [[patch.unused]]
 name = "typst-ide"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?branch=rnote-tinymist-v0.12.0#b37319dfd56211b17b2d8d80d36e320236f25674"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
