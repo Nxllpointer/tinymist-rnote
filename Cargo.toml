@@ -215,9 +215,3 @@ reflexo-typst-shim = { git = "https://github.com/Nxllpointer/typst.ts", rev = "2
 # typst-ts-core = { path = "../typst.ts/core" }
 # typst-ts-compiler = { path = "../typst.ts/compiler" }
 # typstyle = { path = "../typstyle" }
-
-# Patches inherited from rnote
-piet = { git = "https://github.com/flxzt/piet", rev = "17fd59f260db3c54029a8288178e32f9f1742be2" }
-piet-cairo = { git = "https://github.com/flxzt/piet", rev = "17fd59f260db3c54029a8288178e32f9f1742be2" }
-roughr = { git = "https://github.com/orhanbalci/rough-rs", rev = "0701ce0b874061707ef726533b43e1806af8b666" }
-rough_piet = { git = "https://github.com/orhanbalci/rough-rs", rev = "0701ce0b874061707ef726533b43e1806af8b666" }

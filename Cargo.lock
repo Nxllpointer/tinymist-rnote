@@ -7814,26 +7814,6 @@ dependencies = [
 ]
 
 [[patch.unused]]
-name = "piet"
-version = "0.6.2"
-source = "git+https://github.com/flxzt/piet?rev=17fd59f260db3c54029a8288178e32f9f1742be2#17fd59f260db3c54029a8288178e32f9f1742be2"
-
-[[patch.unused]]
-name = "piet-cairo"
-version = "0.6.2"
-source = "git+https://github.com/flxzt/piet?rev=17fd59f260db3c54029a8288178e32f9f1742be2#17fd59f260db3c54029a8288178e32f9f1742be2"
-
-[[patch.unused]]
-name = "rough_piet"
-version = "0.6.0"
-source = "git+https://github.com/orhanbalci/rough-rs?rev=0701ce0b874061707ef726533b43e1806af8b666#0701ce0b874061707ef726533b43e1806af8b666"
-
-[[patch.unused]]
-name = "roughr"
-version = "0.6.0"
-source = "git+https://github.com/orhanbalci/rough-rs?rev=0701ce0b874061707ef726533b43e1806af8b666#0701ce0b874061707ef726533b43e1806af8b666"
-
-[[patch.unused]]
 name = "typst-cli"
 version = "0.12.0"
 source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
