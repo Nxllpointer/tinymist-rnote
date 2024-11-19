@@ -1,4 +1,4 @@
-use crate::{analysis::find_definition, prelude::*};
+use crate::prelude::*;
 
 /// The [`textDocument/definition`] request asks the server for the definition
 /// location of a symbol at a given text document position.
@@ -28,19 +28,17 @@ impl StatefulRequest for GotoDefinitionRequest {
 
     fn request(
         self,
-        ctx: &mut AnalysisContext,
+        ctx: &mut LocalContext,
         doc: Option<VersionedDocument>,
     ) -> Option<Self::Response> {
         let source = ctx.source_by_path(&self.path).ok()?;
         let deref_target = ctx.deref_syntax_at(&source, self.position, 1)?;
         let origin_selection_range = ctx.to_lsp_range(deref_target.node().range(), &source);
 
-        let def = find_definition(ctx, source.clone(), doc.as_ref(), deref_target)?;
+        let def = ctx.def_of_syntax(&source, doc.as_ref(), deref_target)?;
 
-        let (fid, def_range) = def.def_at?;
-
+        let (fid, def_range) = def.def_at(ctx.shared())?;
         let uri = ctx.uri_for_id(fid).ok()?;
-
         let range = ctx.to_lsp_range_(def_range, fid)?;
 
         let res = Some(GotoDefinitionResponse::Link(vec![LocationLink {

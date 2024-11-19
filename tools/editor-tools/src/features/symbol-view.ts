@@ -7,6 +7,7 @@ import { Detypify, DetypifySymbol, ortEnv } from "detypify-service";
 import { ContributeIcon, HelpIcon } from "../icons";
 import { startModal } from "../components/modal";
 import { requestTextEdit } from "../vscode";
+import { base64Decode } from "../utils";
 
 // The following code can make the onnxruntime-web totally offline but causes more than 10MB of bundle size.
 // @ts-ignore
@@ -311,20 +312,104 @@ const CanvasPanel = (strokesState: State<Stroke[] | undefined>) => {
 
 const CATEGORY_INFO: SymbolCategory[] = [
   {
-    value: "greek",
-    name: "Greek Letters",
+    value: "control",
+    name: "Control",
   },
   {
-    value: "controlOrSpace",
-    name: "Control Or Space",
+    value: "space",
+    name: "Space",
+  },
+  {
+    value: "delimiter",
+    name: "Delimiters",
+  },
+  {
+    value: "punctuation",
+    name: "Punctuations",
+  },
+  {
+    value: "accent",
+    name: "Accents",
+  },
+  {
+    value: "quote",
+    name: "Quotes",
+  },
+  {
+    value: "prime",
+    name: "Primes",
+  },
+  {
+    value: "arithmetics",
+    name: "Arithmetic operators",
+  },
+  {
+    value: "logic",
+    name: "Logic",
+  },
+  {
+    value: "relation",
+    name: "Relation operators",
+  },
+  {
+    value: "setTheory",
+    name: "Set Theory",
+  },
+  {
+    value: "calculus",
+    name: "Calculus",
+  },
+  {
+    value: "functionAndCategoryTheory",
+    name: "Function and category theory",
+  },
+  {
+    value: "numberTheory",
+    name: "Number Theory",
+  },
+  {
+    value: "algebra",
+    name: "algebra",
+  },
+  {
+    value: "geometry",
+    name: "Geometry",
+  },
+  {
+    value: "geometry",
+    name: "Geometry",
+  },
+  {
+    value: "currency",
+    name: "Currency",
+  },
+  {
+    value: "shape",
+    name: "Shape",
+  },
+  {
+    value: "arrow",
+    name: "Arrow",
+  },
+  {
+    value: "harpoon",
+    name: "Harpoon",
+  },
+  {
+    value: "tack",
+    name: "Tack",
+  },
+  {
+    value: "greek",
+    name: "Greek Letters",
   },
   {
     value: "hebrew",
     name: "Hebrew Letters",
   },
   {
-    value: "delimiter",
-    name: "Delimiters",
+    value: "doubleStruck",
+    name: "Double Struck",
   },
   {
     value: "mathsConstruct",
@@ -341,10 +426,6 @@ const CATEGORY_INFO: SymbolCategory[] = [
   {
     value: "arrow",
     name: "Arrows",
-  },
-  {
-    value: "accent",
-    name: "Accents",
   },
   {
     value: "misc",
@@ -369,7 +450,7 @@ export const SymbolPicker = () => {
   const symInfo = van.state<SymbolInformation>(
     symbolInformationData.startsWith(":")
       ? SYMBOL_MOCK
-      : JSON.parse(atob(symbolInformationData))
+      : JSON.parse(base64Decode(symbolInformationData))
   );
   console.log("symbolInformation", symInfo);
   const detypifyPromise = Detypify.create();

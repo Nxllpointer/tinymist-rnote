@@ -10,21 +10,20 @@ use typst_syntax::Source;
 use super::*;
 
 fn conv_(s: &str, for_docs: bool) -> EcoString {
-    static FONT_RESOLVER: LazyLock<Result<Arc<FontResolverImpl>>> = LazyLock::new(|| {
-        Ok(Arc::new(
+    static FONT_RESOLVER: LazyLock<Arc<FontResolverImpl>> = LazyLock::new(|| {
+        Arc::new(
             LspUniverseBuilder::resolve_fonts(CompileFontArgs::default())
-                .map_err(|e| format!("{e:?}"))?,
-        ))
+                .expect("cannot resolve default fonts"),
+        )
     });
 
-    let font_resolver = FONT_RESOLVER.clone();
     let cwd = std::env::current_dir().unwrap();
     let main = Source::detached(s);
     let mut universe = LspUniverseBuilder::build(
         EntryState::new_rooted(cwd.as_path().into(), Some(main.id())),
-        font_resolver.unwrap(),
         Default::default(),
-        Default::default()
+        FONT_RESOLVER.clone(),
+        Default::default(),
     )
     .unwrap();
     universe
@@ -32,16 +31,14 @@ fn conv_(s: &str, for_docs: bool) -> EcoString {
         .unwrap();
     let world = universe.snapshot();
 
-    let converter = Typlite::new(Arc::new(world)).annotate_elements(for_docs);
+    let converter = Typlite::new(Arc::new(world)).with_feature(TypliteFeat {
+        annotate_elem: for_docs,
+        ..Default::default()
+    });
     let res = converter.convert().unwrap();
     static REG: OnceLock<Regex> = OnceLock::new();
     let reg = REG.get_or_init(|| Regex::new(r#"data:image/svg\+xml;base64,([^"]+)"#).unwrap());
-    let res = reg.replace(&res, |_captures: &regex::Captures| {
-        // let hash = _captures.get(1).unwrap().as_str();
-        // format!(
-        //     "data:image-hash/svg+xml;base64,siphash128:{:x}",
-        //     typst_shim::utils::hash128(hash)
-        // )
+    let res = reg.replace_all(&res, |_captures: &regex::Captures| {
         "data:image-hash/svg+xml;base64,redacted"
     });
 
@@ -93,7 +90,11 @@ Some inlined raw `a`, ```c b```
 $
 1/2 + 1/3 = 5/6
 $
-        "###), @r###"<p align="center"><img src="data:image-hash/svg+xml;base64,redacted" alt="typst-block" /></p>"###);
+        "###), @r###"
+
+    <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="data:image-hash/svg+xml;base64,redacted"><img alt="typst-block" src="data:image-hash/svg+xml;base64,redacted" /></picture></p>
+            
+    "###);
 }
 
 #[test]

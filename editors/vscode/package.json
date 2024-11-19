@@ -1,14 +1,19 @@
 {
   "name": "tinymist",
-  "version": "0.12.0",
+  "version": "0.12.2",
   "description": "An integrated language service for Typst",
+  "keywords": [
+    "typst",
+    "lsp",
+    "language-server"
+  ],
   "categories": [
     "Programming Languages",
     "Formatters"
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/Myriad-Dreamin/tinymist"
+    "url": "https://github.com/Myriad-Dreamin/tinymist.git"
   },
   "displayName": "Tinymist Typst",
   "author": "Myriad-Dreamin",
@@ -312,6 +317,12 @@
             "Do not use semantic tokens for syntax highlighting"
           ]
         },
+        "tinymist.typingContinueCommentsOnNewline": {
+          "title": "Continue Comments on Newline",
+          "markdownDescription": "Whether to prefix newlines after comments with the corresponding comment prefix.",
+          "type": "boolean",
+          "default": true
+        },
         "tinymist.onEnterEvent": {
           "title": "Handling on enter events",
           "description": "Enable or disable [experimental/onEnter](https://github.com/rust-lang/rust-analyzer/blob/master/docs/dev/lsp-extensions.md#on-enter) (LSP onEnter feature) to allow automatic insertion of characters on enter, such as `///` for comments. Note: restarting the editor is required to change this setting.",
@@ -424,6 +435,40 @@
             "enable",
             "disable"
           ]
+        },
+        "tinymist.renderDocs": {
+          "title": "(Experimental) Render Docs",
+          "description": "(Experimental) Whether to render typst elements in (hover) docs. In VS Code, when this feature is enabled, tinymist will store rendered results in the filesystem's temporary storage to show them in the hover content. Note: Please disable this feature if the editor doesn't support/handle image previewing in docs.",
+          "type": "string",
+          "default": "enable",
+          "enum": [
+            "enable",
+            "disable"
+          ]
+        },
+        "tinymist.completion.postfix": {
+          "title": "Enable Postfix Code Completion",
+          "description": "Whether to enable postfix code completion. For example, `[A].box|` will be completed to `box[A]|`. Hint: Restarting the editor is required to change this setting.",
+          "type": "boolean",
+          "default": true
+        },
+        "tinymist.completion.postfixUfcs": {
+          "title": "Completion: Convert Field Access to Call",
+          "description": "Whether to enable UFCS-style completion. For example, `[A].box|` will be completed to `box[A]|`. Hint: Restarting the editor is required to change this setting.",
+          "type": "boolean",
+          "default": true
+        },
+        "tinymist.completion.postfixUfcsLeft": {
+          "title": "Completion: Convert Field Access to Call (Left Variant)",
+          "description": "Whether to enable left-variant UFCS-style completion. For example, `[A].table|` will be completed to `table(|)[A]`. Hint: Restarting the editor is required to change this setting.",
+          "type": "boolean",
+          "default": true
+        },
+        "tinymist.completion.postfixUfcsRight": {
+          "title": "Completion: Convert Field Access to Call (Right Variant)",
+          "description": "Whether to enable right-variant UFCS-style completion. For example, `[A].table|` will be completed to `table([A], |)`. Hint: Restarting the editor is required to change this setting.",
+          "type": "boolean",
+          "default": true
         },
         "tinymist.previewFeature": {
           "title": "Enable preview features",
@@ -815,12 +860,12 @@
     "commands": [
       {
         "command": "tinymist.exportCurrentPdf",
-        "title": "Export the currently open file as PDF",
+        "title": "Export the Opened File as PDF",
         "category": "Typst"
       },
       {
         "command": "tinymist.pinMainToCurrent",
-        "title": "Pin the main file to the currently opened document",
+        "title": "Pin the Main file to the Opening Document",
         "category": "Typst"
       },
       {
@@ -842,28 +887,28 @@
       {
         "command": "tinymist.showLog",
         "title": "Tinymist: Show Log",
-        "description": "Show log of LSP Server",
+        "description": "Show log of the language server",
         "category": "Typst",
         "icon": "$(list-flat)"
       },
       {
         "command": "tinymist.clearCache",
-        "title": "Clear all cached resources",
+        "title": "Clear all Cached Resources",
         "category": "Typst"
       },
       {
         "command": "tinymist.initTemplate",
-        "title": "Initialize a new Typst project based on a template",
+        "title": "Initialize a New Typst Project based on a Template",
         "category": "Typst"
       },
       {
         "command": "tinymist.initTemplateInPlace",
-        "title": "Insert the content of template entry in place",
+        "title": "Insert the Content of Template Entry in Place",
         "category": "Typst"
       },
       {
         "command": "tinymist.showTemplateGallery",
-        "title": "Show available Typst templates (gallery) for picking up a template to initialize",
+        "title": "Show Available Typst Templates (Gallery) for Picking up a Template to Initialize",
         "category": "Typst"
       },
       {
@@ -894,39 +939,40 @@
       {
         "command": "tinymist.syncLabel",
         "title": "Scan workspace and collect all labels again",
-        "icon": "$(extensions-sync-enabled)"
+        "icon": "$(extensions-sync-enabled)",
+        "category": "Typst"
       },
       {
         "command": "typst-preview.preview",
-        "title": "Typst Preview: Preview current file",
+        "title": "Typst Preview: Preview Opened File",
         "description": "Launch typst-preview server",
         "icon": "$(open-preview)",
         "when": "resourceLangId == typst && editorTextFocus"
       },
       {
         "command": "typst-preview.browser",
-        "title": "Typst Preview: Preview current file in browser",
+        "title": "Typst Preview: Preview Opened File in Browser",
         "description": "Launch typst-preview server and open the preview in your browser",
         "icon": "$(open-preview)",
         "when": "resourceLangId == typst && editorTextFocus"
       },
       {
         "command": "typst-preview.preview-slide",
-        "title": "Typst Preview: Preview current file in slide mode",
+        "title": "Typst Preview: Preview Opened File in Slide Mode",
         "description": "Launch typst-preview server in slide mode",
         "icon": "$(open-preview)",
         "when": "resourceLangId == typst && editorTextFocus"
       },
       {
         "command": "typst-preview.browser-slide",
-        "title": "Typst Preview: Preview current file in browser and slide mode",
+        "title": "Typst Preview: Preview Opened file in Browser and Slide Mode",
         "description": "Launch typst-preview server in slide mode and open the preview in your browser",
         "icon": "$(open-preview)",
         "when": "resourceLangId == typst && editorTextFocus"
       },
       {
         "command": "typst-preview.sync",
-        "title": "Typst Preview: Sync preview with current cursor",
+        "title": "Typst Preview: Sync Preview with Current Cursor",
         "description": "Scroll preview to current cursor position",
         "icon": "$(sync)",
         "when": "resourceLangId == typst && editorTextFocus"
@@ -970,7 +1016,7 @@
         },
         {
           "command": "typst-preview.preview",
-          "when": "resourceLangId == typst && editorTextFocus",
+          "when": "resourceLangId == typst",
           "group": "navigation"
         }
       ],

@@ -68,7 +68,9 @@
 #              ^ source.typst meta.expr.if.typst
 #               ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 #                ^ source.typst meta.expr.if.typst meta.brace.curly.typst
-#                 ^^^^ source.typst
+#                 ^ source.typst
+#                  ^ source.typst markup.content.brace.typst
+#                   ^ source.typst markup.content.brace.typst
 >#if () {} else {} # a
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -120,7 +122,8 @@
 #               ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 #                ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 >{}
-#^^^ source.typst
+#^ source.typst markup.content.brace.typst
+# ^ source.typst markup.content.brace.typst
 >
 >#if () {} else {}
 #^ source.typst keyword.control.hash.typst
@@ -137,7 +140,7 @@
 #               ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 #                ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 >{
-#^^ source.typst
+#^ source.typst markup.content.brace.typst
 >#if () {} else {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -159,7 +162,15 @@
 ># if () {} else {}
 #^ source.typst punctuation.definition.hash.typst
 # ^ source.typst
-#  ^^^^^^^^^^^^^^^^^ source.typst
+#  ^^^ source.typst
+#     ^ source.typst markup.content.brace.typst
+#      ^ source.typst markup.content.brace.typst
+#       ^ source.typst
+#        ^ source.typst markup.content.brace.typst
+#         ^ source.typst markup.content.brace.typst
+#          ^^^^^^ source.typst
+#                ^ source.typst markup.content.brace.typst
+#                 ^ source.typst markup.content.brace.typst
 >1
 #^^ source.typst
 >
@@ -183,11 +194,11 @@
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
 #   ^ source.typst meta.expr.if.typst
-#    ^^^^ source.typst meta.expr.if.typst entity.name.type.primitive.typst
+#    ^^^^ source.typst meta.expr.if.typst constant.language.boolean.typst
 #        ^ source.typst meta.expr.if.typst
 #         ^^ source.typst meta.expr.if.typst keyword.operator.relational.typst
 #           ^ source.typst meta.expr.if.typst
-#            ^^^^^ source.typst meta.expr.if.typst entity.name.type.primitive.typst
+#            ^^^^^ source.typst meta.expr.if.typst constant.language.boolean.typst
 #                 ^ source.typst meta.expr.if.typst
 #                  ^ source.typst meta.expr.if.typst meta.brace.square.typst
 >  {Bad}, but we {dont-care}!
@@ -208,7 +219,7 @@
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
 #   ^ source.typst meta.expr.if.typst
 #    ^ source.typst meta.expr.if.typst meta.brace.curly.typst
-#     ^^^^ source.typst meta.expr.if.typst entity.name.type.primitive.typst
+#     ^^^^ source.typst meta.expr.if.typst constant.language.boolean.typst
 #         ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 #          ^ source.typst meta.expr.if.typst
 #           ^ source.typst meta.expr.if.typst meta.brace.square.typst
@@ -226,7 +237,7 @@
 #      ^ source.typst meta.expr.if.typst
 #       ^^ source.typst meta.expr.if.typst keyword.operator.relational.typst
 #         ^ source.typst meta.expr.if.typst
-#          ^^^^ source.typst meta.expr.if.typst entity.name.type.primitive.typst
+#          ^^^^ source.typst meta.expr.if.typst keyword.other.none.typst
 #              ^ source.typst meta.expr.if.typst
 #               ^ source.typst meta.expr.if.typst meta.brace.square.typst
 >  Two.
@@ -275,7 +286,7 @@
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
 #   ^ source.typst meta.expr.if.typst
-#    ^^^^^ source.typst meta.expr.if.typst entity.name.type.primitive.typst
+#    ^^^^^ source.typst meta.expr.if.typst constant.language.boolean.typst
 #         ^ source.typst meta.expr.if.typst
 #          ^ source.typst meta.expr.if.typst meta.brace.square.typst
 >  Bad.
@@ -331,7 +342,7 @@
 #                             ^^^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
 #                                 ^ source.typst meta.expr.if.typst
 #                                  ^ source.typst meta.expr.if.typst meta.brace.square.typst
-#                                   ^^^^ source.typst meta.expr.if.typst variable.other.readwrite.typst
+#                                   ^^^^ source.typst meta.expr.if.typst
 #                                       ^ source.typst meta.expr.if.typst meta.brace.square.typst
 >  if content == type [Nope] else [ve.]
 #^^ source.typst
@@ -350,8 +361,7 @@
 #                            ^^^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
 #                                ^ source.typst meta.expr.if.typst
 #                                 ^ source.typst meta.expr.if.typst meta.brace.square.typst
-#                                  ^^ source.typst meta.expr.if.typst variable.other.readwrite.typst
-#                                    ^ source.typst meta.expr.if.typst keyword.operator.accessor.typst
+#                                  ^^^ source.typst meta.expr.if.typst
 #                                     ^ source.typst meta.expr.if.typst meta.brace.square.typst
 >}
 #^ source.typst meta.brace.curly.typst
@@ -377,7 +387,9 @@
 #      ^ source.typst meta.expr.if.typst
 #       ^ source.typst meta.expr.if.typst meta.brace.square.typst
 #        ^ source.typst meta.expr.if.typst meta.brace.square.typst
-#         ^^^^ source.typst
+#         ^ source.typst
+#          ^ source.typst markup.content.brace.typst
+#           ^ source.typst markup.content.brace.typst
 >#if () {} {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -387,7 +399,9 @@
 #      ^ source.typst meta.expr.if.typst
 #       ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 #        ^ source.typst meta.expr.if.typst meta.brace.curly.typst
-#         ^^^^ source.typst
+#         ^ source.typst
+#          ^ source.typst markup.content.brace.typst
+#           ^ source.typst markup.content.brace.typst
 >#if [] () {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -409,7 +423,9 @@
 #      ^ source.typst meta.expr.if.typst
 #       ^ source.typst meta.expr.if.typst meta.brace.square.typst
 #        ^ source.typst meta.expr.if.typst meta.brace.square.typst
-#         ^^^^ source.typst
+#         ^ source.typst
+#          ^ source.typst markup.content.brace.typst
+#           ^ source.typst markup.content.brace.typst
 >#if [] {} {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -419,7 +435,9 @@
 #      ^ source.typst meta.expr.if.typst
 #       ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 #        ^ source.typst meta.expr.if.typst meta.brace.curly.typst
-#         ^^^^ source.typst
+#         ^ source.typst
+#          ^ source.typst markup.content.brace.typst
+#           ^ source.typst markup.content.brace.typst
 >#if {} () {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -441,7 +459,9 @@
 #      ^ source.typst meta.expr.if.typst
 #       ^ source.typst meta.expr.if.typst meta.brace.square.typst
 #        ^ source.typst meta.expr.if.typst meta.brace.square.typst
-#         ^^^^ source.typst
+#         ^ source.typst
+#          ^ source.typst markup.content.brace.typst
+#           ^ source.typst markup.content.brace.typst
 >#if {} {} {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -451,7 +471,9 @@
 #      ^ source.typst meta.expr.if.typst
 #       ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 #        ^ source.typst meta.expr.if.typst meta.brace.curly.typst
-#         ^^^^ source.typst
+#         ^ source.typst
+#          ^ source.typst markup.content.brace.typst
+#           ^ source.typst markup.content.brace.typst
 >
 >#if () == () () {}
 #^ source.typst keyword.control.hash.typst
@@ -484,7 +506,9 @@
 #            ^ source.typst meta.expr.if.typst
 #             ^ source.typst meta.expr.if.typst meta.brace.square.typst
 #              ^ source.typst meta.expr.if.typst meta.brace.square.typst
-#               ^^^^ source.typst
+#               ^ source.typst
+#                ^ source.typst markup.content.brace.typst
+#                 ^ source.typst markup.content.brace.typst
 >#if () == () {} {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -499,7 +523,9 @@
 #            ^ source.typst meta.expr.if.typst
 #             ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 #              ^ source.typst meta.expr.if.typst meta.brace.curly.typst
-#               ^^^^ source.typst
+#               ^ source.typst
+#                ^ source.typst markup.content.brace.typst
+#                 ^ source.typst markup.content.brace.typst
 >#if [] == [] () {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -531,7 +557,9 @@
 #            ^ source.typst meta.expr.if.typst
 #             ^ source.typst meta.expr.if.typst meta.brace.square.typst
 #              ^ source.typst meta.expr.if.typst meta.brace.square.typst
-#               ^^^^ source.typst
+#               ^ source.typst
+#                ^ source.typst markup.content.brace.typst
+#                 ^ source.typst markup.content.brace.typst
 >#if [] == [] {} {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -546,7 +574,9 @@
 #            ^ source.typst meta.expr.if.typst
 #             ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 #              ^ source.typst meta.expr.if.typst meta.brace.curly.typst
-#               ^^^^ source.typst
+#               ^ source.typst
+#                ^ source.typst markup.content.brace.typst
+#                 ^ source.typst markup.content.brace.typst
 >#if {} == {} () {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -578,7 +608,9 @@
 #            ^ source.typst meta.expr.if.typst
 #             ^ source.typst meta.expr.if.typst meta.brace.square.typst
 #              ^ source.typst meta.expr.if.typst meta.brace.square.typst
-#               ^^^^ source.typst
+#               ^ source.typst
+#                ^ source.typst markup.content.brace.typst
+#                 ^ source.typst markup.content.brace.typst
 >#if {} == {} {} {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -593,7 +625,9 @@
 #            ^ source.typst meta.expr.if.typst
 #             ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 #              ^ source.typst meta.expr.if.typst meta.brace.curly.typst
-#               ^^^^ source.typst
+#               ^ source.typst
+#                ^ source.typst markup.content.brace.typst
+#                 ^ source.typst markup.content.brace.typst
 >
 >#if () and () () {}
 #^ source.typst keyword.control.hash.typst
@@ -626,7 +660,9 @@
 #             ^ source.typst meta.expr.if.typst
 #              ^ source.typst meta.expr.if.typst meta.brace.square.typst
 #               ^ source.typst meta.expr.if.typst meta.brace.square.typst
-#                ^^^^ source.typst
+#                ^ source.typst
+#                 ^ source.typst markup.content.brace.typst
+#                  ^ source.typst markup.content.brace.typst
 >#if () and () {} {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -641,7 +677,9 @@
 #             ^ source.typst meta.expr.if.typst
 #              ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 #               ^ source.typst meta.expr.if.typst meta.brace.curly.typst
-#                ^^^^ source.typst
+#                ^ source.typst
+#                 ^ source.typst markup.content.brace.typst
+#                  ^ source.typst markup.content.brace.typst
 >#if [] and [] () {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -673,7 +711,9 @@
 #             ^ source.typst meta.expr.if.typst
 #              ^ source.typst meta.expr.if.typst meta.brace.square.typst
 #               ^ source.typst meta.expr.if.typst meta.brace.square.typst
-#                ^^^^ source.typst
+#                ^ source.typst
+#                 ^ source.typst markup.content.brace.typst
+#                  ^ source.typst markup.content.brace.typst
 >#if [] and [] {} {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -688,7 +728,9 @@
 #             ^ source.typst meta.expr.if.typst
 #              ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 #               ^ source.typst meta.expr.if.typst meta.brace.curly.typst
-#                ^^^^ source.typst
+#                ^ source.typst
+#                 ^ source.typst markup.content.brace.typst
+#                  ^ source.typst markup.content.brace.typst
 >#if {} and {} () {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -720,7 +762,9 @@
 #             ^ source.typst meta.expr.if.typst
 #              ^ source.typst meta.expr.if.typst meta.brace.square.typst
 #               ^ source.typst meta.expr.if.typst meta.brace.square.typst
-#                ^^^^ source.typst
+#                ^ source.typst
+#                 ^ source.typst markup.content.brace.typst
+#                  ^ source.typst markup.content.brace.typst
 >#if {} and {} {} {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -735,7 +779,9 @@
 #             ^ source.typst meta.expr.if.typst
 #              ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 #               ^ source.typst meta.expr.if.typst meta.brace.curly.typst
-#                ^^^^ source.typst
+#                ^ source.typst
+#                 ^ source.typst markup.content.brace.typst
+#                  ^ source.typst markup.content.brace.typst
 >
 >#if not () () {}
 #^ source.typst keyword.control.hash.typst
@@ -762,7 +808,9 @@
 #          ^ source.typst meta.expr.if.typst
 #           ^ source.typst meta.expr.if.typst meta.brace.square.typst
 #            ^ source.typst meta.expr.if.typst meta.brace.square.typst
-#             ^^^^ source.typst
+#             ^ source.typst
+#              ^ source.typst markup.content.brace.typst
+#               ^ source.typst markup.content.brace.typst
 >#if not () {} {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -774,7 +822,9 @@
 #          ^ source.typst meta.expr.if.typst
 #           ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 #            ^ source.typst meta.expr.if.typst meta.brace.curly.typst
-#             ^^^^ source.typst
+#             ^ source.typst
+#              ^ source.typst markup.content.brace.typst
+#               ^ source.typst markup.content.brace.typst
 >#if not [] () {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -800,7 +850,9 @@
 #          ^ source.typst meta.expr.if.typst
 #           ^ source.typst meta.expr.if.typst meta.brace.square.typst
 #            ^ source.typst meta.expr.if.typst meta.brace.square.typst
-#             ^^^^ source.typst
+#             ^ source.typst
+#              ^ source.typst markup.content.brace.typst
+#               ^ source.typst markup.content.brace.typst
 >#if not [] {} {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -812,7 +864,9 @@
 #          ^ source.typst meta.expr.if.typst
 #           ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 #            ^ source.typst meta.expr.if.typst meta.brace.curly.typst
-#             ^^^^ source.typst
+#             ^ source.typst
+#              ^ source.typst markup.content.brace.typst
+#               ^ source.typst markup.content.brace.typst
 >#if not {} () {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -838,7 +892,9 @@
 #          ^ source.typst meta.expr.if.typst
 #           ^ source.typst meta.expr.if.typst meta.brace.square.typst
 #            ^ source.typst meta.expr.if.typst meta.brace.square.typst
-#             ^^^^ source.typst
+#             ^ source.typst
+#              ^ source.typst markup.content.brace.typst
+#               ^ source.typst markup.content.brace.typst
 >#if not {} {} {}
 #^ source.typst keyword.control.hash.typst
 # ^^ source.typst meta.expr.if.typst keyword.control.conditional.typst
@@ -850,5 +906,7 @@
 #          ^ source.typst meta.expr.if.typst
 #           ^ source.typst meta.expr.if.typst meta.brace.curly.typst
 #            ^ source.typst meta.expr.if.typst meta.brace.curly.typst
-#             ^^^^ source.typst
+#             ^ source.typst
+#              ^ source.typst markup.content.brace.typst
+#               ^ source.typst markup.content.brace.typst
 >

@@ -1,9 +1,8 @@
 #![allow(unused)]
 
 use ecow::EcoVec;
-use reflexo::hash::hash128;
 
-use crate::ty::prelude::*;
+use crate::{syntax::DeclExpr, ty::prelude::*};
 
 #[derive(Default)]
 struct CompactTy {
@@ -42,12 +41,12 @@ impl TypeScheme {
 struct TypeSimplifier<'a, 'b> {
     principal: bool,
 
-    vars: &'a HashMap<DefId, TypeVarBounds>,
+    vars: &'a FxHashMap<DeclExpr, TypeVarBounds>,
 
-    cano_cache: &'b mut HashMap<(Ty, bool), Ty>,
-    cano_local_cache: &'b mut HashMap<(DefId, bool), Ty>,
-    negatives: &'b mut HashSet<DefId>,
-    positives: &'b mut HashSet<DefId>,
+    cano_cache: &'b mut FxHashMap<(Ty, bool), Ty>,
+    cano_local_cache: &'b mut FxHashMap<(DeclExpr, bool), Ty>,
+    negatives: &'b mut FxHashSet<DeclExpr>,
+    positives: &'b mut FxHashSet<DeclExpr>,
 }
 
 impl<'a, 'b> TypeSimplifier<'a, 'b> {
@@ -69,9 +68,9 @@ impl<'a, 'b> TypeSimplifier<'a, 'b> {
                     FlowVarKind::Strong(w) | FlowVarKind::Weak(w) => {
                         let w = w.read();
                         let inserted = if pol {
-                            self.positives.insert(v.def)
+                            self.positives.insert(v.def.clone())
                         } else {
-                            self.negatives.insert(v.def)
+                            self.negatives.insert(v.def.clone())
                         };
                         if !inserted {
                             return;
@@ -121,6 +120,11 @@ impl<'a, 'b> TypeSimplifier<'a, 'b> {
                     self.analyze(p, pol);
                 }
             }
+            Ty::Pattern(args) => {
+                for p in args.inputs() {
+                    self.analyze(p, pol);
+                }
+            }
             Ty::Unary(u) => self.analyze(&u.lhs, pol),
             Ty::Binary(b) => {
                 let [lhs, rhs] = b.operands();
@@ -148,8 +152,8 @@ impl<'a, 'b> TypeSimplifier<'a, 'b> {
                     self.analyze(ub, pol);
                 }
             }
-            Ty::Field(v) => {
-                self.analyze(&v.field, pol);
+            Ty::Param(v) => {
+                self.analyze(&v.ty, pol);
             }
             Ty::Value(_v) => {}
             Ty::Any => {}
@@ -162,12 +166,12 @@ impl<'a, 'b> TypeSimplifier<'a, 'b> {
         match ty {
             Ty::Let(w) => self.transform_let(w, None, pol),
             Ty::Var(v) => {
-                if let Some(cano) = self.cano_local_cache.get(&(v.def, self.principal)) {
+                if let Some(cano) = self.cano_local_cache.get(&(v.def.clone(), self.principal)) {
                     return cano.clone();
                 }
                 // todo: avoid cycle
                 self.cano_local_cache
-                    .insert((v.def, self.principal), Ty::Any);
+                    .insert((v.def.clone(), self.principal), Ty::Any);
 
                 let res = match &self.vars.get(&v.def).unwrap().bounds {
                     FlowVarKind::Strong(w) | FlowVarKind::Weak(w) => {
@@ -178,7 +182,7 @@ impl<'a, 'b> TypeSimplifier<'a, 'b> {
                 };
 
                 self.cano_local_cache
-                    .insert((v.def, self.principal), res.clone());
+                    .insert((v.def.clone(), self.principal), res.clone());
 
                 res
             }
@@ -199,26 +203,33 @@ impl<'a, 'b> TypeSimplifier<'a, 'b> {
                 Ty::With(SigWithTy::new(sig, with))
             }
             // Negate the pol to make correct covariance
+            // todo: negate?
             Ty::Args(args) => Ty::Args(self.transform_sig(args, !pol)),
-            Ty::Unary(u) => Ty::Unary(TypeUnary::new(u.op, self.transform(&u.lhs, pol).into())),
+            Ty::Pattern(args) => Ty::Pattern(self.transform_sig(args, !pol)),
+            Ty::Unary(u) => Ty::Unary(TypeUnary::new(u.op, self.transform(&u.lhs, pol))),
             Ty::Binary(b) => {
                 let [lhs, rhs] = b.operands();
                 let lhs = self.transform(lhs, pol);
                 let rhs = self.transform(rhs, pol);
 
-                Ty::Binary(TypeBinary::new(b.op, lhs.into(), rhs.into()))
+                Ty::Binary(TypeBinary::new(b.op, lhs, rhs))
             }
             Ty::If(i) => Ty::If(IfTy::new(
                 self.transform(&i.cond, pol).into(),
                 self.transform(&i.then, pol).into(),
                 self.transform(&i.else_, pol).into(),
             )),
-            Ty::Union(v) => Ty::Union(self.transform_seq(v, pol)),
-            Ty::Field(ty) => {
+            Ty::Union(seq) => {
+                let seq = seq.iter().map(|ty| self.transform(ty, pol));
+                let seq_no_any = seq.filter(|ty| !matches!(ty, Ty::Any));
+                let seq = seq_no_any.collect::<Vec<_>>();
+                Ty::from_types(seq.into_iter())
+            }
+            Ty::Param(ty) => {
                 let mut ty = ty.as_ref().clone();
-                ty.field = self.transform(&ty.field, pol);
+                ty.ty = self.transform(&ty.ty, pol);
 
-                Ty::Field(ty.into())
+                Ty::Param(ty.into())
             }
             Ty::Select(sel) => {
                 let mut sel = sel.as_ref().clone();
@@ -239,33 +250,43 @@ impl<'a, 'b> TypeSimplifier<'a, 'b> {
         seq.collect::<Vec<_>>().into()
     }
 
-    // todo: reduce duplication
-    fn transform_let(&mut self, w: &TypeBounds, def_id: Option<&DefId>, pol: bool) -> Ty {
-        let mut lbs = EcoVec::with_capacity(w.lbs.len());
-        let mut ubs = EcoVec::with_capacity(w.ubs.len());
+    #[allow(clippy::mutable_key_type)]
+    fn transform_let(&mut self, w: &TypeBounds, def_id: Option<&DeclExpr>, pol: bool) -> Ty {
+        let mut lbs = HashSet::with_capacity(w.lbs.len());
+        let mut ubs = HashSet::with_capacity(w.ubs.len());
 
         log::debug!("transform let [principal={}] with {w:?}", self.principal);
 
         if !self.principal || ((pol) && !def_id.is_some_and(|i| self.negatives.contains(i))) {
             for lb in w.lbs.iter() {
-                lbs.push(self.transform(lb, pol));
+                lbs.insert(self.transform(lb, pol));
             }
         }
         if !self.principal || ((!pol) && !def_id.is_some_and(|i| self.positives.contains(i))) {
             for ub in w.ubs.iter() {
-                ubs.push(self.transform(ub, !pol));
+                ubs.insert(self.transform(ub, !pol));
             }
         }
 
         if ubs.is_empty() {
             if lbs.len() == 1 {
-                return lbs.pop().unwrap();
+                return lbs.into_iter().next().unwrap();
             }
             if lbs.is_empty() {
                 return Ty::Any;
             }
+        } else if lbs.is_empty() && ubs.len() == 1 {
+            return ubs.into_iter().next().unwrap();
         }
 
+        // todo: bad performance
+        let mut lbs: Vec<_> = lbs.into_iter().collect();
+        lbs.sort();
+        let mut ubs: Vec<_> = ubs.into_iter().collect();
+        ubs.sort();
+
+        let mut lbs = lbs.into_iter().collect();
+        let mut ubs = ubs.into_iter().collect();
         Ty::Let(TypeBounds { lbs, ubs }.into())
     }
 

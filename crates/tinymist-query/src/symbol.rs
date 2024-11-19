@@ -31,14 +31,14 @@ pub struct SymbolRequest {
 impl SemanticRequest for SymbolRequest {
     type Response = Vec<SymbolInformation>;
 
-    fn request(self, ctx: &mut AnalysisContext) -> Option<Self::Response> {
+    fn request(self, ctx: &mut LocalContext) -> Option<Self::Response> {
         // todo: let typst.ts expose source
 
         let mut symbols = vec![];
 
         // todo! need compilation for iter_dependencies
 
-        for path in ctx.resources.dependencies() {
+        for path in ctx.dependencies() {
             let Ok(source) = ctx.source_by_path(&path) else {
                 continue;
             };

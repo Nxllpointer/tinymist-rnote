@@ -2,86 +2,18 @@
 
 use itertools::Either;
 use tinymist_derive::BindTyCtx;
-use typst::foundations::{Closure, ParamInfo};
+use typst::foundations::Closure;
 
-use super::{prelude::*, resolve_callee, BoundChecker, DocSource, SigTy, TypeVar};
+use super::{
+    prelude::*, BoundChecker, Definition, DocSource, ParamTy, SharedContext, SigTy, SigWithTy,
+    TypeScheme, TypeVar,
+};
 use crate::analysis::PostTypeChecker;
-use crate::docs::{UntypedSignatureDocs, UntypedSymbolDocs, UntypedVarDocs};
+use crate::docs::{UntypedDefDocs, UntypedSignatureDocs, UntypedVarDocs};
 use crate::syntax::get_non_strict_def_target;
-use crate::ty::TyCtx;
-use crate::ty::TypeBounds;
+use crate::ty::{InsTy, TyCtx};
+use crate::ty::{ParamAttrs, TypeBounds};
 use crate::upstream::truncated_repr;
-
-/// Describes a function parameter.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
-pub struct ParamAttrs {
-    /// Is the parameter positional?
-    pub positional: bool,
-    /// Is the parameter named?
-    ///
-    /// Can be true even if `positional` is true if the parameter can be given
-    /// in both variants.
-    pub named: bool,
-    /// Can the parameter be given any number of times?
-    pub variadic: bool,
-    /// Is the parameter settable with a set rule?
-    pub settable: bool,
-}
-
-impl ParamAttrs {
-    pub(crate) fn positional() -> ParamAttrs {
-        ParamAttrs {
-            positional: true,
-            named: false,
-            variadic: false,
-            settable: false,
-        }
-    }
-
-    pub(crate) fn named() -> ParamAttrs {
-        ParamAttrs {
-            positional: false,
-            named: true,
-            variadic: false,
-            settable: false,
-        }
-    }
-
-    pub(crate) fn variadic() -> ParamAttrs {
-        ParamAttrs {
-            positional: true,
-            named: false,
-            variadic: true,
-            settable: false,
-        }
-    }
-}
-
-impl From<&ParamInfo> for ParamAttrs {
-    fn from(param: &ParamInfo) -> Self {
-        ParamAttrs {
-            positional: param.positional,
-            named: param.named,
-            variadic: param.variadic,
-            settable: param.settable,
-        }
-    }
-}
-
-/// Describes a function parameter.
-#[derive(Debug, Clone)]
-pub struct ParamSpec {
-    /// The name of the parameter.
-    pub name: StrRef,
-    /// The docstring of the parameter.
-    pub docs: Option<EcoString>,
-    /// The default value of the variable
-    pub default: Option<EcoString>,
-    /// The type of the parameter.
-    pub ty: Ty,
-    /// The attributes of the parameter.
-    pub attrs: ParamAttrs,
-}
 
 /// Describes a function signature.
 #[derive(Debug, Clone)]
@@ -110,7 +42,7 @@ impl Signature {
     }
 
     /// Returns the all parameters of the function.
-    pub(crate) fn params(&self) -> impl Iterator<Item = (&ParamSpec, Option<&Ty>)> {
+    pub(crate) fn params(&self) -> impl Iterator<Item = (&Interned<ParamTy>, Option<&Ty>)> {
         let primary = self.primary().params();
         // todo: with stack
         primary
@@ -121,6 +53,17 @@ impl Signature {
         // todo: with stack
         primary
     }
+
+    pub(crate) fn param_shift(&self) -> usize {
+        match self {
+            Signature::Primary(_) => 0,
+            Signature::Partial(sig) => sig
+                .with_stack
+                .iter()
+                .map(|ws| ws.items.len())
+                .sum::<usize>(),
+        }
+    }
 }
 
 /// Describes a primary function signature.
@@ -129,7 +72,7 @@ pub struct PrimarySignature {
     /// The documentation of the function
     pub docs: Option<EcoString>,
     /// The documentation of the parameter.
-    pub param_specs: Vec<ParamSpec>,
+    pub param_specs: Vec<Interned<ParamTy>>,
     /// Whether the function has fill, stroke, or size parameters.
     pub has_fill_or_size_or_stroke: bool,
     /// The associated signature type.
@@ -138,33 +81,28 @@ pub struct PrimarySignature {
 }
 
 impl PrimarySignature {
-    /// Returns the type representation of the function.
-    pub(crate) fn ty(&self) -> Ty {
-        Ty::Func(self.sig_ty.clone())
-    }
-
     /// Returns the number of positional parameters of the function.
     pub fn pos_size(&self) -> usize {
         self.sig_ty.name_started as usize
     }
 
     /// Returns the positional parameters of the function.
-    pub fn pos(&self) -> &[ParamSpec] {
+    pub fn pos(&self) -> &[Interned<ParamTy>] {
         &self.param_specs[..self.pos_size()]
     }
 
     /// Returns the positional parameters of the function.
-    pub fn get_pos(&self, offset: usize) -> Option<&ParamSpec> {
+    pub fn get_pos(&self, offset: usize) -> Option<&Interned<ParamTy>> {
         self.pos().get(offset)
     }
 
     /// Returns the named parameters of the function.
-    pub fn named(&self) -> &[ParamSpec] {
+    pub fn named(&self) -> &[Interned<ParamTy>] {
         &self.param_specs[self.pos_size()..self.pos_size() + self.sig_ty.names.names.len()]
     }
 
     /// Returns the named parameters of the function.
-    pub fn get_named(&self, name: &StrRef) -> Option<&ParamSpec> {
+    pub fn get_named(&self, name: &StrRef) -> Option<&Interned<ParamTy>> {
         self.named().get(self.sig_ty.names.find(name)?)
     }
 
@@ -174,13 +112,13 @@ impl PrimarySignature {
     }
 
     /// Returns the rest parameter of the function.
-    pub fn rest(&self) -> Option<&ParamSpec> {
+    pub fn rest(&self) -> Option<&Interned<ParamTy>> {
         self.has_spread_right()
             .then(|| &self.param_specs[self.pos_size() + self.sig_ty.names.names.len()])
     }
 
     /// Returns the all parameters of the function.
-    pub fn params(&self) -> impl Iterator<Item = (&ParamSpec, Option<&Ty>)> {
+    pub fn params(&self) -> impl Iterator<Item = (&Interned<ParamTy>, Option<&Ty>)> {
         let pos = self.pos();
         let named = self.named();
         let rest = self.rest();
@@ -200,9 +138,9 @@ impl PrimarySignature {
 #[derive(Debug, Clone)]
 pub struct ArgInfo {
     /// The argument's name.
-    pub name: Option<EcoString>,
-    /// The argument's value.
-    pub value: Option<Value>,
+    pub name: Option<StrRef>,
+    /// The argument's term.
+    pub term: Option<Ty>,
 }
 
 /// Describes a function argument list.
@@ -223,13 +161,13 @@ pub struct PartialSignature {
 
 /// The language object that the signature is being analyzed for.
 #[derive(Debug, Clone)]
-pub enum SignatureTarget<'a> {
+pub enum SignatureTarget {
     /// A static node without knowing the function at runtime.
-    Def(Source, IdentRef),
+    Def(Option<Source>, Definition),
     /// A static node without knowing the function at runtime.
-    SyntaxFast(Source, LinkedNode<'a>),
+    SyntaxFast(Source, Span),
     /// A static node without knowing the function at runtime.
-    Syntax(Source, LinkedNode<'a>),
+    Syntax(Source, Span),
     /// A function that is known at runtime.
     Runtime(Func),
     /// A function that is known at runtime.
@@ -237,10 +175,10 @@ pub enum SignatureTarget<'a> {
 }
 
 pub(crate) fn analyze_signature(
-    ctx: &mut AnalysisContext,
+    ctx: &Arc<SharedContext>,
     callee_node: SignatureTarget,
 ) -> Option<Signature> {
-    ctx.compute_signature(callee_node.clone(), |ctx| {
+    ctx.compute_signature(callee_node.clone(), move |ctx| {
         log::debug!("analyzing signature for {callee_node:?}");
         analyze_type_signature(ctx, &callee_node)
             .or_else(|| analyze_dyn_signature(ctx, &callee_node))
@@ -248,26 +186,40 @@ pub(crate) fn analyze_signature(
 }
 
 fn analyze_type_signature(
-    ctx: &mut AnalysisContext,
-    callee_node: &SignatureTarget<'_>,
+    ctx: &Arc<SharedContext>,
+    callee_node: &SignatureTarget,
 ) -> Option<Signature> {
     let (type_info, ty) = match callee_node {
-        SignatureTarget::Def(..) | SignatureTarget::Convert(..) => None,
-        SignatureTarget::SyntaxFast(source, node) | SignatureTarget::Syntax(source, node) => {
-            let type_info = ctx.type_check(source)?;
-            let ty = type_info.type_of_span(node.span())?;
+        SignatureTarget::Convert(..) => return None,
+        SignatureTarget::SyntaxFast(source, span) | SignatureTarget::Syntax(source, span) => {
+            let type_info = ctx.type_check(source);
+            let ty = type_info.type_of_span(*span)?;
+            Some((type_info, ty))
+        }
+        SignatureTarget::Def(source, def) => {
+            let span = def.decl.span();
+            let type_info = ctx.type_check(source.as_ref()?);
+            let ty = type_info.type_of_span(span)?;
             Some((type_info, ty))
         }
         SignatureTarget::Runtime(f) => {
             let source = ctx.source_by_id(f.span().id()?).ok()?;
             let node = source.find(f.span())?;
             let def = get_non_strict_def_target(node.parent()?.clone())?;
-            let type_info = ctx.type_check(&source)?;
+            let type_info = ctx.type_check(&source);
             let ty = type_info.type_of_span(def.name()?.span())?;
             Some((type_info, ty))
         }
     }?;
 
+    sig_of_type(ctx, &type_info, ty)
+}
+
+pub(crate) fn sig_of_type(
+    ctx: &Arc<SharedContext>,
+    type_info: &TypeScheme,
+    ty: Ty,
+) -> Option<Signature> {
     // todo multiple sources
     let mut srcs = ty.sources();
     srcs.sort();
@@ -275,7 +227,7 @@ fn analyze_type_signature(
     let type_var = srcs.into_iter().next()?;
     match type_var {
         DocSource::Var(v) => {
-            let mut ty_ctx = PostTypeChecker::new(ctx, &type_info);
+            let mut ty_ctx = PostTypeChecker::new(ctx.clone(), type_info);
             let sig_ty = Ty::Func(ty.sig_repr(true, &mut ty_ctx)?);
             let sig_ty = type_info.simplify(sig_ty, false);
             let Ty::Func(sig_ty) = sig_ty else {
@@ -283,15 +235,15 @@ fn analyze_type_signature(
             };
 
             // todo: this will affect inlay hint: _var_with
-            let (_var_with, docstring) = match type_info.var_docs.get(&v.def).map(|x| x.as_ref()) {
-                Some(UntypedSymbolDocs::Function(sig)) => (vec![], Either::Left(sig.as_ref())),
-                Some(UntypedSymbolDocs::Variable(d)) => find_alias_stack(&mut ty_ctx, &v, d)?,
+            let (var_with, docstring) = match type_info.var_docs.get(&v.def).map(|x| x.as_ref()) {
+                Some(UntypedDefDocs::Function(sig)) => (vec![], Either::Left(sig.as_ref())),
+                Some(UntypedDefDocs::Variable(d)) => find_alias_stack(&mut ty_ctx, &v, d)?,
                 _ => return None,
             };
 
             let docstring = match docstring {
                 Either::Left(docstring) => docstring,
-                Either::Right(f) => return Some(ctx.type_of_func(f)),
+                Either::Right(f) => return Some(wind_stack(var_with, ctx.type_of_func(f))),
             };
 
             let mut param_specs = Vec::new();
@@ -311,13 +263,13 @@ fn analyze_type_signature(
                     has_fill_or_size_or_stroke = true;
                 }
 
-                param_specs.push(ParamSpec {
+                param_specs.push(Interned::new(ParamTy {
                     name,
                     docs: Some(doc.docs.clone()),
                     default,
                     ty,
                     attrs: ParamAttrs::positional(),
-                });
+                }));
             }
 
             for (name, ty) in sig_ty.named_params() {
@@ -329,34 +281,35 @@ fn analyze_type_signature(
                     has_fill_or_size_or_stroke = true;
                 }
 
-                param_specs.push(ParamSpec {
+                param_specs.push(Interned::new(ParamTy {
                     name: name.clone(),
                     docs: Some(doc.docs.clone()),
                     default,
                     ty,
                     attrs: ParamAttrs::named(),
-                });
+                }));
             }
 
             if let Some(doc) = docstring.rest.as_ref() {
                 let default = doc.default.clone();
 
-                param_specs.push(ParamSpec {
+                param_specs.push(Interned::new(ParamTy {
                     name: doc.name.clone(),
                     docs: Some(doc.docs.clone()),
                     default,
                     ty: sig_ty.rest_param().cloned().unwrap_or(Ty::Any),
                     attrs: ParamAttrs::variadic(),
-                });
+                }));
             }
 
-            Some(Signature::Primary(Arc::new(PrimarySignature {
+            let sig = Signature::Primary(Arc::new(PrimarySignature {
                 docs: Some(docstring.docs.clone()),
                 param_specs,
                 has_fill_or_size_or_stroke,
                 sig_ty,
                 _broken,
-            })))
+            }));
+            Some(wind_stack(var_with, sig))
         }
         src @ (DocSource::Builtin(..) | DocSource::Ins(..)) => {
             Some(ctx.type_of_func(src.as_func()?))
@@ -364,17 +317,54 @@ fn analyze_type_signature(
     }
 }
 
+fn wind_stack(var_with: Vec<WithElem>, sig: Signature) -> Signature {
+    if var_with.is_empty() {
+        return sig;
+    }
+
+    let (primary, mut base_args) = match sig {
+        Signature::Primary(primary) => (primary, eco_vec![]),
+        Signature::Partial(partial) => (partial.signature.clone(), partial.with_stack.clone()),
+    };
+
+    let mut accepting = primary.pos().iter().skip(base_args.len());
+
+    // Ignoring docs at the moment
+    for (_d, w) in var_with {
+        if let Some(w) = w {
+            let mut items = eco_vec![];
+            for pos in w.with.positional_params() {
+                let Some(arg) = accepting.next() else {
+                    break;
+                };
+                items.push(ArgInfo {
+                    name: Some(arg.name.clone()),
+                    term: Some(pos.clone()),
+                });
+            }
+            // todo: ignored spread arguments
+            if !items.is_empty() {
+                base_args.push(ArgsInfo { items });
+            }
+        }
+    }
+
+    Signature::Partial(Arc::new(PartialSignature {
+        signature: primary,
+        with_stack: base_args,
+    }))
+}
+
+type WithElem<'a> = (&'a UntypedVarDocs, Option<Interned<SigWithTy>>);
+
 fn find_alias_stack<'a>(
     ctx: &'a mut PostTypeChecker,
     v: &Interned<TypeVar>,
     d: &'a UntypedVarDocs,
-) -> Option<(
-    Vec<&'a UntypedVarDocs>,
-    Either<&'a UntypedSignatureDocs, Func>,
-)> {
+) -> Option<(Vec<WithElem<'a>>, Either<&'a UntypedSignatureDocs, Func>)> {
     let mut checker = AliasStackChecker {
         ctx,
-        stack: vec![d],
+        stack: vec![(d, None)],
         res: None,
         checking_with: true,
     };
@@ -385,14 +375,14 @@ fn find_alias_stack<'a>(
 
 #[derive(BindTyCtx)]
 #[bind(ctx)]
-struct AliasStackChecker<'a, 'b, 'w> {
-    ctx: &'a mut PostTypeChecker<'b, 'w>,
-    stack: Vec<&'a UntypedVarDocs>,
+struct AliasStackChecker<'a, 'b> {
+    ctx: &'a mut PostTypeChecker<'b>,
+    stack: Vec<WithElem<'a>>,
     res: Option<Either<&'a UntypedSignatureDocs, Func>>,
     checking_with: bool,
 }
 
-impl<'a, 'b, 'w> BoundChecker for AliasStackChecker<'a, 'b, 'w> {
+impl<'a, 'b> BoundChecker for AliasStackChecker<'a, 'b> {
     fn check_var(&mut self, u: &Interned<TypeVar>, pol: bool) {
         log::debug!("collecting var {u:?} {pol:?}");
         if self.res.is_some() {
@@ -409,12 +399,12 @@ impl<'a, 'b, 'w> BoundChecker for AliasStackChecker<'a, 'b, 'w> {
         log::debug!("collecting var {u:?} {pol:?} => {docs:?}");
         // todo: bind builtin functions
         match docs {
-            Some(UntypedSymbolDocs::Function(sig)) => {
+            Some(UntypedDefDocs::Function(sig)) => {
                 self.res = Some(Either::Left(sig));
             }
-            Some(UntypedSymbolDocs::Variable(d)) => {
+            Some(UntypedDefDocs::Variable(d)) => {
                 self.checking_with = true;
-                self.stack.push(d);
+                self.stack.push((d, None));
                 self.check_var_rec(u, pol);
                 self.stack.pop();
                 self.checking_with = false;
@@ -431,6 +421,7 @@ impl<'a, 'b, 'w> BoundChecker for AliasStackChecker<'a, 'b, 'w> {
         match (self.checking_with, ty) {
             (true, Ty::With(w)) => {
                 log::debug!("collecting with {ty:?} {pol:?}");
+                self.stack.last_mut().unwrap().1 = Some(w.clone());
                 self.checking_with = false;
                 w.sig.bounds(pol, self);
                 self.checking_with = true;
@@ -455,20 +446,25 @@ impl<'a, 'b, 'w> BoundChecker for AliasStackChecker<'a, 'b, 'w> {
 }
 
 fn analyze_dyn_signature(
-    ctx: &mut AnalysisContext,
-    callee_node: &SignatureTarget<'_>,
+    ctx: &Arc<SharedContext>,
+    callee_node: &SignatureTarget,
 ) -> Option<Signature> {
     let func = match callee_node {
-        SignatureTarget::Def(..) => return None,
+        SignatureTarget::Def(_source, def) => def.value()?.to_func()?,
         SignatureTarget::SyntaxFast(..) => return None,
-        SignatureTarget::Syntax(_, node) => {
-            let func = resolve_callee(ctx, node)?;
-            log::debug!("got function {func:?}");
-            func
+        SignatureTarget::Syntax(source, span) => {
+            let def = ctx.def_of_span(source, None, *span)?;
+            def.value()?.to_func()?
         }
         SignatureTarget::Convert(func) | SignatureTarget::Runtime(func) => func.clone(),
     };
 
+    Some(func_signature(func))
+}
+
+/// Gets the signature of a function.
+#[comemo::memoize]
+pub fn func_signature(func: Func) -> Signature {
     use typst::foundations::func::Repr;
     let mut with_stack = eco_vec![];
     let mut func = func;
@@ -480,26 +476,13 @@ fn analyze_dyn_signature(
                 .iter()
                 .map(|arg| ArgInfo {
                     name: arg.name.clone().map(From::from),
-                    value: Some(arg.value.v.clone()),
+                    term: Some(Ty::Value(InsTy::new(arg.value.v.clone()))),
                 })
                 .collect(),
         });
         func = f.0.clone();
     }
 
-    let signature = analyze_dyn_signature_inner(func);
-    log::trace!("got signature {signature:?}");
-
-    if with_stack.is_empty() {
-        return Some(Signature::Primary(signature));
-    }
-    Some(Signature::Partial(Arc::new(PartialSignature {
-        signature,
-        with_stack,
-    })))
-}
-
-fn analyze_dyn_signature_inner(func: Func) -> Arc<PrimarySignature> {
     let mut pos_tys = vec![];
     let mut named_tys = Vec::new();
     let mut rest_ty = None;
@@ -511,7 +494,7 @@ fn analyze_dyn_signature_inner(func: Func) -> Arc<PrimarySignature> {
     let mut broken = false;
     let mut has_fill_or_size_or_stroke = false;
 
-    let mut add_param = |param: ParamSpec| {
+    let mut add_param = |param: Interned<ParamTy>| {
         let name = param.name.clone();
         if param.attrs.named {
             if matches!(name.as_ref(), "fill" | "stroke" | "size") {
@@ -535,7 +518,6 @@ fn analyze_dyn_signature_inner(func: Func) -> Arc<PrimarySignature> {
         }
     };
 
-    use typst::foundations::func::Repr;
     let ret_ty = match func.inner() {
         Repr::With(..) => unreachable!(),
         Repr::Closure(c) => {
@@ -544,13 +526,13 @@ fn analyze_dyn_signature_inner(func: Func) -> Arc<PrimarySignature> {
         }
         Repr::Element(..) | Repr::Native(..) => {
             for p in func.params().unwrap() {
-                add_param(ParamSpec {
+                add_param(Interned::new(ParamTy {
                     name: p.name.into(),
                     docs: Some(p.docs.into()),
                     default: p.default.map(|d| truncated_repr(&d())),
                     ty: Ty::from_param_site(&func, p),
                     attrs: p.into(),
-                });
+                }));
             }
 
             func.returns().map(|r| Ty::from_return_site(&func, r))
@@ -566,16 +548,30 @@ fn analyze_dyn_signature_inner(func: Func) -> Arc<PrimarySignature> {
         param_specs.push(doc);
     }
 
-    Arc::new(PrimarySignature {
+    let signature = Arc::new(PrimarySignature {
         docs: func.docs().map(From::from),
         param_specs,
         has_fill_or_size_or_stroke,
         sig_ty: sig_ty.into(),
         _broken: broken,
-    })
+    });
+
+    log::trace!("got signature {signature:?}");
+
+    if with_stack.is_empty() {
+        return Signature::Primary(signature);
+    }
+
+    Signature::Partial(Arc::new(PartialSignature {
+        signature,
+        with_stack,
+    }))
 }
 
-fn analyze_closure_signature(c: Arc<LazyHash<Closure>>, add_param: &mut impl FnMut(ParamSpec)) {
+fn analyze_closure_signature(
+    c: Arc<LazyHash<Closure>>,
+    add_param: &mut impl FnMut(Interned<ParamTy>),
+) {
     log::trace!("closure signature for: {:?}", c.node.kind());
 
     let closure = &c.node;
@@ -588,34 +584,34 @@ fn analyze_closure_signature(c: Arc<LazyHash<Closure>>, add_param: &mut impl FnM
         match param {
             ast::Param::Pos(e) => {
                 let name = format!("{}", PatternDisplay(&e));
-                add_param(ParamSpec {
+                add_param(Interned::new(ParamTy {
                     name: name.as_str().into(),
                     docs: None,
                     default: None,
                     ty: Ty::Any,
                     attrs: ParamAttrs::positional(),
-                });
+                }));
             }
             // todo: pattern
             ast::Param::Named(n) => {
                 let expr = unwrap_expr(n.expr()).to_untyped().clone().into_text();
-                add_param(ParamSpec {
+                add_param(Interned::new(ParamTy {
                     name: n.name().get().into(),
                     docs: Some(eco_format!("Default value: {expr}")),
                     default: Some(expr),
                     ty: Ty::Any,
                     attrs: ParamAttrs::named(),
-                });
+                }));
             }
             ast::Param::Spread(n) => {
                 let ident = n.sink_ident().map(|e| e.as_str());
-                add_param(ParamSpec {
+                add_param(Interned::new(ParamTy {
                     name: ident.unwrap_or_default().into(),
                     docs: None,
                     default: None,
                     ty: Ty::Any,
                     attrs: ParamAttrs::variadic(),
-                });
+                }));
             }
         }
     }

@@ -5,15 +5,24 @@ pub mod library;
 pub mod scopes;
 pub mod value;
 
-use std::fmt::Write;
+use core::fmt;
 use std::sync::Arc;
+use std::{fmt::Write, sync::LazyLock};
 
 pub use error::*;
 
 use base64::Engine;
 use scopes::Scopes;
+use tinymist_world::reflexo_typst::path::unix_slash;
 use tinymist_world::{base::ShadowApi, EntryReader, LspWorld};
-use typst::{foundations::Bytes, layout::Abs, World};
+use typst::foundations::IntoValue;
+use typst::WorldExt;
+use typst::{
+    foundations::{Bytes, Dict},
+    layout::Abs,
+    utils::LazyHash,
+    World,
+};
 use value::{Args, Value};
 
 use ecow::{eco_format, EcoString};
@@ -22,10 +31,34 @@ use typst_syntax::{
     FileId, Source, SyntaxKind, SyntaxNode, VirtualPath,
 };
 
+pub use typst_syntax as syntax;
+
 /// The result type for typlite.
 pub type Result<T, Err = Error> = std::result::Result<T, Err>;
 
 pub use tinymist_world::CompileOnceArgs;
+
+/// A color theme for rendering the content. The valid values can be checked in [color-scheme](https://developer.mozilla.org/en-US/docs/Web/CSS/color-scheme).
+#[derive(Debug, Default, Clone, Copy)]
+pub enum ColorTheme {
+    #[default]
+    Light,
+    Dark,
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct TypliteFeat {
+    /// The preferred color theme
+    pub color_theme: Option<ColorTheme>,
+    /// Allows GFM (GitHub Flavored Markdown) markups.
+    pub gfm: bool,
+    /// Annotate the elements for identification.
+    pub annotate_elem: bool,
+    /// Embed errors in the output instead of yielding them.
+    pub soft_error: bool,
+    /// Remove HTML tags from the output.
+    pub remove_html: bool,
+}
 
 /// Task builder for converting a typst document to Markdown.
 pub struct Typlite {
@@ -33,10 +66,8 @@ pub struct Typlite {
     world: Arc<LspWorld>,
     /// library to use for the conversion.
     library: Option<Arc<Scopes<Value>>>,
-    /// Documentation style to use for annotating the document.
-    do_annotate: bool,
-    /// Whether to enable GFM (GitHub Flavored Markdown) features.
-    gfm: bool,
+    /// Features for the conversion.
+    feat: TypliteFeat,
 }
 
 impl Typlite {
@@ -48,8 +79,7 @@ impl Typlite {
         Self {
             world,
             library: None,
-            do_annotate: false,
-            gfm: false,
+            feat: Default::default(),
         }
     }
 
@@ -59,9 +89,9 @@ impl Typlite {
         self
     }
 
-    /// Annotate the elements for identification.
-    pub fn annotate_elements(mut self, do_annotate: bool) -> Self {
-        self.do_annotate = do_annotate;
+    /// Set conversion feature
+    pub fn with_feature(mut self, feat: TypliteFeat) -> Self {
+        self.feat = feat;
         self
     }
 
@@ -80,8 +110,7 @@ impl Typlite {
 
         let worker = TypliteWorker {
             current,
-            gfm: self.gfm,
-            do_annotate: self.do_annotate,
+            feat: self.feat,
             list_depth: 0,
             scopes: self
                 .library
@@ -99,11 +128,11 @@ impl Typlite {
 #[derive(Clone)]
 pub struct TypliteWorker {
     current: FileId,
-    gfm: bool,
-    do_annotate: bool,
     scopes: Arc<Scopes<Value>>,
     world: Arc<LspWorld>,
     list_depth: usize,
+    /// Features for the conversion.
+    pub feat: TypliteFeat,
 }
 
 impl TypliteWorker {
@@ -290,39 +319,202 @@ impl TypliteWorker {
         Ok(Value::Content(s))
     }
 
-    fn render(&mut self, node: &SyntaxNode, inline: bool) -> Result<Value> {
-        let color = "#c0caf5";
+    pub fn to_raw_block(&mut self, node: &SyntaxNode, inline: bool) -> Result<Value> {
+        let content = node.clone().into_text();
 
-        let main = Bytes::from(eco_format!(
-            r##"#set page(width: auto, height: auto, margin: (y: 0.45em, rest: 0em));#set text(rgb("{color}"))
-{}"##,
-            node.clone().into_text()
-        ).as_bytes().to_owned());
+        let s = if inline {
+            let mut s = EcoString::with_capacity(content.len() + 2);
+            s.push_str("`");
+            s.push_str(&content);
+            s.push_str("`");
+            s
+        } else {
+            let mut s = EcoString::with_capacity(content.len() + 15);
+            s.push_str("```");
+            let lang = match node.cast::<ast::Expr>() {
+                Some(ast::Expr::Text(..) | ast::Expr::Space(..)) => "typ",
+                Some(..) => "typc",
+                None => "typ",
+            };
+            s.push_str(lang);
+            s.push('\n');
+            s.push_str(&content);
+            s.push('\n');
+            s.push_str("```");
+            s
+        };
+
+        Ok(Value::Content(s))
+    }
+
+    pub fn render(&mut self, node: &SyntaxNode, inline: bool) -> Result<Value> {
+        let code = node.clone().into_text();
+        self.render_code(&code, false, "center", "", inline)
+    }
+
+    pub fn render_code(
+        &mut self,
+        code: &str,
+        is_markup: bool,
+        align: &str,
+        extra_attrs: &str,
+        inline: bool,
+    ) -> Result<Value> {
+        let theme = self.feat.color_theme;
+        let mut render = |theme| self.render_inner(code, is_markup, theme);
+
+        let mut content = EcoString::new();
+
+        let inline_attrs = if inline {
+            r#" style="vertical-align: -0.35em""#
+        } else {
+            ""
+        };
+        match theme {
+            Some(theme) => {
+                let data = render(theme);
+                match data {
+                    Ok(data) => {
+                        if !inline {
+                            let _ = write!(content, r#"<p align="{align}">"#);
+                        }
+                        let _ = write!(
+                            content,
+                            r#"<img{inline_attrs} alt="typst-block" src="data:image/svg+xml;base64,{data}" {extra_attrs}/>"#,
+                        );
+                        if !inline {
+                            content.push_str("</p>");
+                        }
+                    }
+                    Err(err) if self.feat.soft_error => {
+                        // wrap the error in a fenced code block
+                        let err = err.to_string().replace("`", r#"\`"#);
+                        let _ = write!(content, "```\nRender Error\n{err}\n```");
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+            None => {
+                let dark = render(ColorTheme::Dark);
+                let light = render(ColorTheme::Light);
+
+                match (dark, light) {
+                    (Ok(dark), Ok(light)) => {
+                        if !inline {
+                            let _ = write!(content, r#"<p align="{align}">"#);
+                        }
+                        let _ = write!(
+                            content,
+                            r#"<picture><source media="(prefers-color-scheme: dark)" srcset="data:image/svg+xml;base64,{dark}"><img{inline_attrs} alt="typst-block" src="data:image/svg+xml;base64,{light}" {extra_attrs}/></picture>"#,
+                        );
+                        if !inline {
+                            content.push_str("</p>");
+                        }
+                    }
+                    (Err(err), _) | (_, Err(err)) if self.feat.soft_error => {
+                        // wrap the error in a fenced code block
+                        let err = err.to_string().replace("`", r#"\`"#);
+                        let _ = write!(content, "```\nRendering Error\n{err}\n```");
+                    }
+                    (Err(err), _) | (_, Err(err)) => return Err(err),
+                }
+            }
+        }
+
+        Ok(Value::Content(content))
+    }
+
+    fn render_inner(&mut self, code: &str, is_markup: bool, theme: ColorTheme) -> Result<String> {
+        static DARK_THEME_INPUT: LazyLock<Arc<LazyHash<Dict>>> = LazyLock::new(|| {
+            Arc::new(LazyHash::new(Dict::from_iter(std::iter::once((
+                "x-color-theme".into(),
+                "dark".into_value(),
+            )))))
+        });
+
+        let code = WrapCode(code, is_markup);
+        // let inputs = is_dark.then(|| DARK_THEME_INPUT.clone());
+        let inputs = match theme {
+            ColorTheme::Dark => Some(DARK_THEME_INPUT.clone()),
+            ColorTheme::Light => None,
+        };
+        let code = eco_format!(
+            r##"#set page(width: auto, height: auto, margin: (y: 0.45em, rest: 0em), fill: none);
+            #set text(fill: rgb("#c0caf5")) if sys.inputs.at("x-color-theme", default: none) == "dark";
+            {code}"##
+        );
+        let main = Bytes::from(code.as_bytes().to_owned());
+
         // let world = LiteWorld::new(main);
         let main_id = FileId::new(None, VirtualPath::new("__render__.typ"));
         let entry = self.world.entry_state().select_in_workspace(main_id);
         let mut world = self.world.task(tinymist_world::base::TaskInputs {
             entry: Some(entry),
-            inputs: None,
+            inputs,
         });
+        world.source_db.take_state();
         world.map_shadow_by_id(main_id, main).unwrap();
 
-        let document = typst::compile(&world)
-            .output
-            .map_err(|e| format!("compiling math node: {e:?}"))?;
+        let document = typst::compile(&world).output;
+        let document = document.map_err(|e| {
+            let mut err = String::new();
+            let _ = write!(err, "compiling node: ");
+            let write_span = |span: typst_syntax::Span, err: &mut String| {
+                let file = span.id().map(|id| match id.package() {
+                    Some(package) => {
+                        format!("{package}:{}", unix_slash(id.vpath().as_rooted_path()))
+                    }
+                    None => unix_slash(id.vpath().as_rooted_path()),
+                });
+                let range = world.range(span);
+                match (file, range) {
+                    (Some(file), Some(range)) => {
+                        let _ = write!(err, "{file:?}:{range:?}");
+                    }
+                    (Some(file), None) => {
+                        let _ = write!(err, "{file:?}");
+                    }
+                    (None, Some(range)) => {
+                        let _ = write!(err, "{range:?}");
+                    }
+                    _ => {
+                        let _ = write!(err, "unknown location");
+                    }
+                }
+            };
+
+            for s in e.iter() {
+                match s.severity {
+                    typst::diag::Severity::Error => {
+                        let _ = write!(err, "error: ");
+                    }
+                    typst::diag::Severity::Warning => {
+                        let _ = write!(err, "warning: ");
+                    }
+                }
+
+                err.push_str(&s.message);
+                err.push_str(" at ");
+                write_span(s.span, &mut err);
+
+                for hint in s.hints.iter() {
+                    err.push_str("\nHint: ");
+                    err.push_str(hint);
+                }
+
+                for trace in &s.trace {
+                    write!(err, "\nTrace: {} at ", trace.v).unwrap();
+                    write_span(trace.span, &mut err);
+                }
+
+                err.push('\n');
+            }
+
+            err
+        })?;
 
         let svg_payload = typst_svg::svg_merged(&document, Abs::zero());
-        let base64 = base64::engine::general_purpose::STANDARD.encode(svg_payload);
-
-        if inline {
-            Ok(Value::Content(eco_format!(
-                r#"<img style="vertical-align: -0.35em" src="data:image/svg+xml;base64,{base64}" alt="typst-block" />"#
-            )))
-        } else {
-            Ok(Value::Content(eco_format!(
-                r#"<p align="center"><img src="data:image/svg+xml;base64,{base64}" alt="typst-block" /></p>"#
-            )))
-        }
+        Ok(base64::engine::general_purpose::STANDARD.encode(svg_payload))
     }
 
     fn char(arg: char) -> Result<Value> {
@@ -333,7 +525,7 @@ impl TypliteWorker {
         Ok(Value::Content(node.clone().into_text()))
     }
 
-    fn value(res: Value) -> EcoString {
+    pub fn value(res: Value) -> EcoString {
         match res {
             Value::None => EcoString::new(),
             Value::Content(content) => content,
@@ -402,7 +594,7 @@ impl TypliteWorker {
 
     fn link(&mut self, node: &SyntaxNode) -> Result<Value> {
         // GFM supports autolinks
-        if self.gfm {
+        if self.feat.gfm {
             // return Self::str(node, s);
             return Self::str(node);
         }
@@ -435,12 +627,12 @@ impl TypliteWorker {
         let list_item = node.cast::<ast::ListItem>().unwrap();
 
         s.push_str("- ");
-        if self.do_annotate {
+        if self.feat.annotate_elem {
             let _ = write!(s, "<!-- typlite:begin:list-item {} -->", self.list_depth);
             self.list_depth += 1;
         }
         s.push_str(&Self::value(self.eval(list_item.body().to_untyped())?));
-        if self.do_annotate {
+        if self.feat.annotate_elem {
             self.list_depth -= 1;
             let _ = write!(s, "<!-- typlite:end:list-item {} -->", self.list_depth);
         }
@@ -468,6 +660,10 @@ impl TypliteWorker {
 
     fn equation(&mut self, node: &SyntaxNode) -> Result<Value> {
         let equation: ast::Equation = node.cast().unwrap();
+
+        if self.feat.remove_html {
+            return self.to_raw_block(node, !equation.block());
+        }
 
         self.render(node, !equation.block())
     }
@@ -501,6 +697,9 @@ impl TypliteWorker {
     }
 
     fn contextual(&mut self, node: &SyntaxNode) -> Result<Value> {
+        if self.feat.remove_html {
+            return self.to_raw_block(node, false);
+        }
         self.render(node, false)
     }
 
@@ -518,6 +717,25 @@ impl TypliteWorker {
     fn sub_file(mut self, src: Source) -> Result<EcoString> {
         self.current = src.id();
         self.convert(src.root())
+    }
+}
+
+struct WrapCode<'a>(&'a str, bool);
+
+impl<'a> fmt::Display for WrapCode<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let is_markup = self.1;
+        if is_markup {
+            f.write_str("#[")?;
+        } else {
+            f.write_str("#{")?;
+        }
+        f.write_str(self.0)?;
+        if is_markup {
+            f.write_str("]")
+        } else {
+            f.write_str("}")
+        }
     }
 }
 

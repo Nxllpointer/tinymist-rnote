@@ -3,21 +3,23 @@
 use hashbrown::HashSet;
 use tinymist_derive::BindTyCtx;
 
-use super::prelude::*;
+use super::{prelude::*, ParamAttrs, ParamTy, SharedContext};
 use super::{
-    ArgsTy, FieldTy, Sig, SigChecker, SigShape, SigSurfaceKind, SigTy, Ty, TyCtx, TyCtxMut,
-    TypeBounds, TypeScheme, TypeVar,
+    ArgsTy, Sig, SigChecker, SigShape, SigSurfaceKind, SigTy, Ty, TyCtx, TyCtxMut, TypeBounds,
+    TypeScheme, TypeVar,
 };
 use crate::syntax::{get_check_target, get_check_target_by_context, CheckTarget, ParamTarget};
 
 /// With given type information, check the type of a literal expression again by
 /// touching the possible related nodes.
 pub(crate) fn post_type_check(
-    ctx: &mut AnalysisContext,
+    ctx: Arc<SharedContext>,
     info: &TypeScheme,
     node: LinkedNode,
 ) -> Option<Ty> {
-    PostTypeChecker::new(ctx, info).check(&node)
+    let mut checker = PostTypeChecker::new(ctx, info);
+    let res = checker.check(&node);
+    checker.simplify(&res?)
 }
 
 #[derive(Default)]
@@ -28,14 +30,14 @@ struct SignatureReceiver {
 }
 
 impl SignatureReceiver {
-    fn insert(&mut self, ty: &Ty, pol: bool) {
+    fn insert(&mut self, ty: Ty, pol: bool) {
         log::debug!("post check receive: {ty:?}");
         if !pol {
             if self.lbs_dedup.insert(ty.clone()) {
-                self.bounds.lbs.push(ty.clone());
+                self.bounds.lbs.push(ty);
             }
         } else if self.ubs_dedup.insert(ty.clone()) {
-            self.bounds.ubs.push(ty.clone());
+            self.bounds.ubs.push(ty);
         }
     }
 
@@ -49,13 +51,18 @@ fn check_signature<'a>(
     target: &'a ParamTarget,
 ) -> impl FnMut(&mut PostTypeChecker, Sig, &[Interned<ArgsTy>], bool) -> Option<()> + 'a {
     move |worker, sig, args, pol| {
+        let (sig, _is_partialize) = match sig {
+            Sig::Partialize(sig) => (*sig, true),
+            sig => (sig, false),
+        };
+
         let SigShape { sig: sig_ins, .. } = sig.shape(worker)?;
 
         match &target {
             ParamTarget::Named(n) => {
                 let ident = n.cast::<ast::Ident>()?;
                 let ty = sig_ins.named(&ident.into())?;
-                receiver.insert(ty, !pol);
+                receiver.insert(ty.clone(), !pol);
 
                 Some(())
             }
@@ -70,20 +77,19 @@ fn check_signature<'a>(
                 }
 
                 // truncate args
-                let c = args
+                let bound_pos = args
                     .iter()
                     .map(|args| args.positional_params().len())
                     .sum::<usize>();
-                let nth = sig_ins.pos(c + positional).or_else(|| sig_ins.rest_param());
-                if let Some(nth) = nth {
+                if let Some(nth) = sig_ins.pos_or_rest(bound_pos + positional) {
                     receiver.insert(nth, !pol);
                 }
 
                 // names
                 for (name, _) in sig_ins.named_params() {
                     // todo: reduce fields, fields ty
-                    let field = FieldTy::new_untyped(name.clone());
-                    receiver.insert(&Ty::Field(field), !pol);
+                    let field = ParamTy::new_untyped(name.clone(), ParamAttrs::named());
+                    receiver.insert(Ty::Param(field), !pol);
                 }
 
                 Some(())
@@ -92,14 +98,14 @@ fn check_signature<'a>(
     }
 }
 
-pub(crate) struct PostTypeChecker<'a, 'w> {
-    ctx: &'a mut AnalysisContext<'w>,
+pub(crate) struct PostTypeChecker<'a> {
+    ctx: Arc<SharedContext>,
     pub info: &'a TypeScheme,
     checked: HashMap<Span, Option<Ty>>,
     locals: TypeScheme,
 }
 
-impl<'a, 'w> TyCtx for PostTypeChecker<'a, 'w> {
+impl<'a> TyCtx for PostTypeChecker<'a> {
     fn global_bounds(&self, var: &Interned<TypeVar>, pol: bool) -> Option<TypeBounds> {
         self.info.global_bounds(var, pol)
     }
@@ -109,7 +115,7 @@ impl<'a, 'w> TyCtx for PostTypeChecker<'a, 'w> {
     }
 }
 
-impl<'a, 'w> TyCtxMut for PostTypeChecker<'a, 'w> {
+impl<'a> TyCtxMut for PostTypeChecker<'a> {
     type Snap = <TypeScheme as TyCtxMut>::Snap;
 
     fn start_scope(&mut self) -> Self::Snap {
@@ -131,10 +137,14 @@ impl<'a, 'w> TyCtxMut for PostTypeChecker<'a, 'w> {
     fn type_of_value(&mut self, val: &Value) -> Ty {
         self.ctx.type_of_value(val)
     }
+
+    fn check_module_item(&mut self, _module: TypstFileId, _key: &StrRef) -> Option<Ty> {
+        None
+    }
 }
 
-impl<'a, 'w> PostTypeChecker<'a, 'w> {
-    pub fn new(ctx: &'a mut AnalysisContext<'w>, info: &'a TypeScheme) -> Self {
+impl<'a> PostTypeChecker<'a> {
+    pub fn new(ctx: Arc<SharedContext>, info: &'a TypeScheme) -> Self {
         Self {
             ctx,
             info,
@@ -156,17 +166,29 @@ impl<'a, 'w> PostTypeChecker<'a, 'w> {
         ty
     }
 
+    fn simplify(&mut self, ty: &Ty) -> Option<Ty> {
+        Some(self.info.simplify(ty.clone(), false))
+    }
+
     fn check_(&mut self, node: &LinkedNode) -> Option<Ty> {
         let context = node.parent()?;
         log::debug!("post check: {:?}::{:?}", context.kind(), node.kind());
-        let checked_context = self.check_context(context, node);
-        let res = self.check_self(context, node, checked_context);
+
+        let context_ty = self.check_context(context, node);
+        let self_ty = if !matches!(node.kind(), SyntaxKind::Label | SyntaxKind::Ref) {
+            self.info.type_of_span(node.span())
+        } else {
+            None
+        };
+
+        let contextual_self_ty = self.check_target(get_check_target(node.clone()), context_ty);
         log::debug!(
-            "post check(res): {:?}::{:?} -> {res:?}",
+            "post check(res): {:?}::{:?} -> {self_ty:?}, {contextual_self_ty:?}",
             context.kind(),
             node.kind(),
         );
-        res
+
+        Ty::or(self_ty, contextual_self_ty)
     }
 
     fn check_context_or(&mut self, context: &LinkedNode, context_ty: Option<Ty>) -> Option<Ty> {
@@ -197,12 +219,50 @@ impl<'a, 'w> PostTypeChecker<'a, 'w> {
                 let callee = self.check_context_or(&callee, context_ty)?;
                 log::debug!("post check call target: ({callee:?})::{target:?} is_set: {is_set}");
 
+                let sig = self.ctx.sig_of_type(self.info, callee)?;
+                log::debug!("post check call sig: {target:?} {sig:?}");
                 let mut resp = SignatureReceiver::default();
 
-                self.check_signatures(&callee, false, &mut check_signature(&mut resp, &target));
+                match &target {
+                    ParamTarget::Named(n) => {
+                        let ident = n.cast::<ast::Ident>()?.into();
+                        let ty = sig.primary().get_named(&ident)?;
+                        // todo: losing docs
+                        resp.insert(ty.ty.clone(), false);
+                    }
+                    ParamTarget::Positional {
+                        // todo: spreads
+                        spreads: _,
+                        positional,
+                        is_spread,
+                    } => {
+                        if *is_spread {
+                            return None;
+                        }
+
+                        // truncate args
+                        let c = sig.param_shift();
+                        let nth = sig
+                            .primary()
+                            .get_pos(c + positional)
+                            .or_else(|| sig.primary().rest());
+                        if let Some(nth) = nth {
+                            resp.insert(Ty::Param(nth.clone()), false);
+                        }
+
+                        // names
+                        for field in sig.primary().named() {
+                            if is_set && !field.attrs.settable {
+                                continue;
+                            }
+
+                            resp.insert(Ty::Param(field.clone()), false);
+                        }
+                    }
+                }
 
                 log::debug!("post check target iterated: {:?}", resp.bounds);
-                Some(self.info.simplify(resp.finalize(), false))
+                Some(resp.finalize())
             }
             CheckTarget::Element { container, target } => {
                 let container_ty = self.check_context_or(&container, context_ty)?;
@@ -218,7 +278,7 @@ impl<'a, 'w> PostTypeChecker<'a, 'w> {
                 );
 
                 log::debug!("post check target iterated: {:?}", resp.bounds);
-                Some(self.info.simplify(resp.finalize(), false))
+                Some(resp.finalize())
             }
             CheckTarget::Paren {
                 container,
@@ -241,7 +301,7 @@ impl<'a, 'w> PostTypeChecker<'a, 'w> {
                 );
 
                 log::debug!("post check target iterated: {:?}", resp.bounds);
-                Some(self.info.simplify(resp.finalize(), false))
+                Some(resp.finalize())
             }
             CheckTarget::Normal(target) => {
                 let ty = self.check_context_or(&target, context_ty)?;
@@ -278,28 +338,6 @@ impl<'a, 'w> PostTypeChecker<'a, 'w> {
         }
     }
 
-    fn check_self(
-        &mut self,
-        context: &LinkedNode,
-        node: &LinkedNode,
-        context_ty: Option<Ty>,
-    ) -> Option<Ty> {
-        match node.kind() {
-            SyntaxKind::Ident => {
-                let ty = self.info.type_of_span(node.span());
-                log::debug!("post check ident: {node:?} -> {ty:?}");
-                self.simplify(&ty?)
-            }
-            // todo: destructuring
-            SyntaxKind::FieldAccess => {
-                let ty = self.info.type_of_span(node.span());
-                self.simplify(&ty?)
-                    .or_else(|| self.check_context_or(context, context_ty))
-            }
-            _ => self.check_target(get_check_target(node.clone()), context_ty),
-        }
-    }
-
     fn destruct_let(&mut self, pattern: ast::Pattern, node: LinkedNode) -> Option<Ty> {
         match pattern {
             ast::Pattern::Placeholder(_) => None,
@@ -307,7 +345,7 @@ impl<'a, 'w> PostTypeChecker<'a, 'w> {
                 let ast::Expr::Ident(ident) = n else {
                     return None;
                 };
-                self.simplify(&self.info.type_of_span(ident.span())?)
+                self.info.type_of_span(ident.span())
             }
             ast::Pattern::Parenthesized(p) => {
                 self.destruct_let(p.expr().to_untyped().cast()?, node)
@@ -320,21 +358,12 @@ impl<'a, 'w> PostTypeChecker<'a, 'w> {
         }
     }
 
-    fn check_signatures(&mut self, ty: &Ty, pol: bool, checker: &mut impl PostSigChecker) {
-        let mut checker = PostSigCheckWorker(self, checker);
-        ty.sig_surface(pol, SigSurfaceKind::Call, &mut checker);
-    }
-
     fn check_element_of<T>(&mut self, ty: &Ty, pol: bool, context: &LinkedNode, checker: &mut T)
     where
         T: PostSigChecker,
     {
         let mut checker = PostSigCheckWorker(self, checker);
         ty.sig_surface(pol, sig_context_of(context), &mut checker)
-    }
-
-    fn simplify(&mut self, ty: &Ty) -> Option<Ty> {
-        Some(self.info.simplify(ty.clone(), false))
     }
 }
 
@@ -365,9 +394,9 @@ where
 
 #[derive(BindTyCtx)]
 #[bind(0)]
-struct PostSigCheckWorker<'x, 'a, 'w, T>(&'x mut PostTypeChecker<'a, 'w>, &'x mut T);
+struct PostSigCheckWorker<'x, 'a, T>(&'x mut PostTypeChecker<'a>, &'x mut T);
 
-impl<'x, 'a, 'w, T: PostSigChecker> SigChecker for PostSigCheckWorker<'x, 'a, 'w, T> {
+impl<'x, 'a, T: PostSigChecker> SigChecker for PostSigCheckWorker<'x, 'a, T> {
     fn check(
         &mut self,
         sig: Sig,

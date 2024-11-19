@@ -3,10 +3,9 @@ use typst_shim::syntax::LinkedNodeExt;
 
 use crate::{
     adt::interner::Interned,
-    analysis::find_definition,
     prelude::*,
     syntax::{get_check_target, get_deref_target, CheckTarget, ParamTarget},
-    DocTooltip, LspParamInfo, SemanticRequest,
+    LspParamInfo, SemanticRequest,
 };
 
 /// The [`textDocument/signatureHelp`] request is sent from the client to the
@@ -24,7 +23,7 @@ pub struct SignatureHelpRequest {
 impl SemanticRequest for SignatureHelpRequest {
     type Response = SignatureHelp;
 
-    fn request(self, ctx: &mut AnalysisContext) -> Option<Self::Response> {
+    fn request(self, ctx: &mut LocalContext) -> Option<Self::Response> {
         let source = ctx.source_by_path(&self.path).ok()?;
         let cursor = ctx.to_typst_pos(self.position, &source)? + 1;
 
@@ -40,33 +39,14 @@ impl SemanticRequest for SignatureHelpRequest {
         };
 
         let deref_target = get_deref_target(callee, cursor)?;
-
-        let def_link = find_definition(ctx, source.clone(), None, deref_target)?;
-
-        let documentation = DocTooltip::get(ctx, &def_link)
-            .as_deref()
-            .map(markdown_docs);
-
-        let Some(Value::Func(function)) = def_link.value else {
-            return None;
-        };
-        log::trace!("got function {function:?}");
-
-        let mut function = &function;
-        use typst::foundations::func::Repr;
-        let mut param_shift = 0;
-        while let Repr::With(inner) = function.inner() {
-            param_shift += inner.1.items.iter().filter(|x| x.name.is_none()).count();
-            function = &inner.0;
-        }
-
-        let sig = ctx.signature_dyn(function.clone());
-
+        let def = ctx.def_of_syntax(&source, None, deref_target)?;
+        let sig = ctx.sig_of_def(def.clone())?;
         log::debug!("got signature {sig:?}");
 
+        let param_shift = sig.param_shift();
         let mut active_parameter = None;
 
-        let mut label = def_link.name.clone();
+        let mut label = def.name().as_ref().to_owned();
         let mut params = Vec::new();
 
         label.push('(');
@@ -136,7 +116,7 @@ impl SemanticRequest for SignatureHelpRequest {
         Some(SignatureHelp {
             signatures: vec![SignatureInformation {
                 label: label.to_string(),
-                documentation,
+                documentation: sig.primary().docs.as_deref().map(markdown_docs),
                 parameters: Some(params),
                 active_parameter: active_parameter.map(|x| x as u32),
             }],

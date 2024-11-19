@@ -23,16 +23,41 @@ See #link("https://github.com/Myriad-Dreamin/tinymist#features")[Tinymist Featur
   }
   ```
 
-== Minimal Setup: LazyVim as an Example
-<minimal-setup-lazyvim-as-an-example>
-This section shows you a minimal way to setup tinymist in Neovim (LazyVim).
+== Setup
 
-+ Copy or merge the #link("https://github.com/Myriad-Dreamin/tinymist/tree/main/editors/neovim/config/autocmds.lua")[Autocmds file] and #link("https://github.com/Myriad-Dreamin/tinymist/tree/main/editors/neovim/plugins/tinymist.lua")[Plugin file] to corresponding paths into `~/.config/nvim/`.
-
-+ Check and restart Neovim.
+This section shows you a minimal way to setup tinymist in #link("https://www.lazyvim.org/")[LazyVim]. For other distros, we also bring some tips for you.
 
 // todo: heading link support
-Please see #md-alter(link(<extra-settings>)[Extra Settings], () => link("#extra-settings")[Extra Settings]) for more configuration.
+Please see #md-alter(link(<neovim-extra-settings>)[Extra Settings], () => link("#extra-settings")[Extra Settings]) for more configuration.
+
+=== Setup for #link("https://www.lazyvim.org/")[LazyVim]
+
+Copy or merge the two files to corresponding paths into `~/.config/nvim/`.
+
+- #link("https://github.com/Myriad-Dreamin/tinymist/tree/main/editors/neovim/config/autocmds.lua")[Autocmds file] will help associate `.typ` file extension to `typst` filetype.
+- #link("https://github.com/Myriad-Dreamin/tinymist/tree/main/editors/neovim/plugins/tinymist.lua")[Plugin file] will help start tinymist for buffers with the `typst` filetype.
+
+Then, check and restart Neovim.
+
+=== Setup for #link("https://github.com/AstroNvim")[AstroVim]
+
+AstroNvim now uses tinymist by default. Please check the #link("https://github.com/AstroNvim/astrocommunity/tree/main/lua/astrocommunity/pack/typst")[setup script].
+
+=== Setup for #link("https://github.com/neoclide/coc.nvim")[coc.nvim]
+
+You can edit the `coc-settings.json` by executing `:CocConfig`:
+
+```json
+{
+  "languageserver": {
+    "tinymist": {
+      "command": "tinymist",
+      "filetypes": ["typst"],
+      "settings": { ... }
+    }
+  }
+}
+```
 
 == Tips
 <tips>
@@ -72,10 +97,10 @@ autocmd BufNewFile,BufRead *.typ setfiletype typst
 ```
 
 == Extra Settings
-<extra-settings>
-=== Configuring LSP Server
-<configuring-lsp-server>
-To configure LSP server, you can edit the `opts.servers.tinymist.settings`. For example, if you want to export PDF on typing and output files in `$root_dir/target` directory:
+<neovim-extra-settings>
+=== Configuring Language Server
+<neovim-configuring-language-server>
+To configure language server, you can edit the `opts.servers.tinymist.settings`. For example, if you want to export PDF on typing and output files in `$root_dir/target` directory:
 
 ```lua
 return {
@@ -104,7 +129,7 @@ Enable LSP-based folding range with `kevinhwang91/nvim-ufo`:
 
 ```lua
 return {
-  { -- configure LSP servers
+  { -- configure language servers
     "neovim/nvim-lspconfig",
     dependencies = "kevinhwang91/nvim-ufo", -- enable LSP-based folds
   },

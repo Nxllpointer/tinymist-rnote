@@ -55,7 +55,7 @@ pub fn plain_docs_sentence(docs: &str) -> EcoString {
                     let link_content = s.from(c + 1);
                     s.eat();
 
-                    log::info!("Intra Link: {link_content}");
+                    log::debug!("Intra Link: {link_content}");
                     let link = resolve(link_content, "https://typst.app/docs/").ok();
                     let link = link.unwrap_or_else(|| {
                         log::warn!("Failed to resolve link: {link_content}");
@@ -422,11 +422,6 @@ pub fn truncated_repr_<const SZ_LIMIT: usize>(value: &Value) -> EcoString {
 pub fn truncated_repr(value: &Value) -> EcoString {
     const _10MB: usize = 100 * 1024 * 1024;
     truncated_repr_::<_10MB>(value)
-}
-
-pub fn truncated_doc_repr(value: &Value) -> EcoString {
-    const _128B: usize = 128;
-    truncated_repr_::<_128B>(value)
 }
 
 /// Run a function with a VM instance in the world

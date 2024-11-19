@@ -1,15 +1,16 @@
 use core::fmt;
 
-use crate::prelude::*;
+use ecow::{eco_format, EcoString};
 use once_cell::sync::Lazy;
 use regex::RegexSet;
 use strum::{EnumIter, IntoEnumIterator};
-use typst::{foundations::CastInfo, syntax::Span};
+use typst::foundations::CastInfo;
 use typst::{
     foundations::{AutoValue, Content, Func, NoneValue, ParamInfo, Type, Value},
     layout::Length,
 };
 
+use crate::syntax::Decl;
 use crate::ty::*;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, PartialOrd, Ord, EnumIter)]
@@ -200,6 +201,8 @@ pub enum BuiltinTy {
     Content,
     Space,
     None,
+    Break,
+    Continue,
     Infer,
     FlowNone,
     Auto,
@@ -211,6 +214,7 @@ pub enum BuiltinTy {
     TextLang,
     TextRegion,
 
+    Label,
     CiteLabel,
     RefLabel,
     Dir,
@@ -225,7 +229,9 @@ pub enum BuiltinTy {
 
     Tag(Box<(StrRef, Option<Interned<PackageId>>)>),
     Type(typst::foundations::Type),
+    TypeType(typst::foundations::Type),
     Element(typst::foundations::Element),
+    Module(Interned<Decl>),
     Path(PathPreference),
 }
 
@@ -237,6 +243,8 @@ impl fmt::Debug for BuiltinTy {
             BuiltinTy::Content => f.write_str("Content"),
             BuiltinTy::Space => f.write_str("Space"),
             BuiltinTy::None => f.write_str("None"),
+            BuiltinTy::Break => f.write_str("Break"),
+            BuiltinTy::Continue => f.write_str("Continue"),
             BuiltinTy::Infer => f.write_str("Infer"),
             BuiltinTy::FlowNone => f.write_str("FlowNone"),
             BuiltinTy::Auto => f.write_str("Auto"),
@@ -249,6 +257,7 @@ impl fmt::Debug for BuiltinTy {
             BuiltinTy::TextRegion => write!(f, "TextRegion"),
             BuiltinTy::Dir => write!(f, "Dir"),
             BuiltinTy::Length => write!(f, "Length"),
+            BuiltinTy::Label => write!(f, "Label"),
             BuiltinTy::CiteLabel => write!(f, "CiteLabel"),
             BuiltinTy::RefLabel => write!(f, "RefLabel"),
             BuiltinTy::Float => write!(f, "Float"),
@@ -257,7 +266,8 @@ impl fmt::Debug for BuiltinTy {
             BuiltinTy::Inset => write!(f, "Inset"),
             BuiltinTy::Outset => write!(f, "Outset"),
             BuiltinTy::Radius => write!(f, "Radius"),
-            BuiltinTy::Type(ty) => write!(f, "Type({})", ty.long_name()),
+            BuiltinTy::TypeType(ty) => write!(f, "TypeType({})", ty.short_name()),
+            BuiltinTy::Type(ty) => write!(f, "Type({})", ty.short_name()),
             BuiltinTy::Element(e) => e.fmt(f),
             BuiltinTy::Tag(tag) => {
                 let (name, id) = tag.as_ref();
@@ -267,6 +277,7 @@ impl fmt::Debug for BuiltinTy {
                     write!(f, "Tag({name:?})")
                 }
             }
+            BuiltinTy::Module(m) => write!(f, "{m:?}"),
             BuiltinTy::Path(p) => write!(f, "Path({p:?})"),
         }
     }
@@ -307,13 +318,15 @@ impl BuiltinTy {
         BuiltinTy::Type(builtin).literally()
     }
 
-    pub(crate) fn describe(&self) -> String {
+    pub(crate) fn describe(&self) -> EcoString {
         let res = match self {
             BuiltinTy::Clause => "any",
             BuiltinTy::Undef => "any",
             BuiltinTy::Content => "content",
             BuiltinTy::Space => "content",
             BuiltinTy::None => "none",
+            BuiltinTy::Break => "break",
+            BuiltinTy::Continue => "continue",
             BuiltinTy::Infer => "any",
             BuiltinTy::FlowNone => "none",
             BuiltinTy::Auto => "auto",
@@ -327,6 +340,7 @@ impl BuiltinTy {
             BuiltinTy::Dir => "dir",
             BuiltinTy::Length => "length",
             BuiltinTy::Float => "float",
+            BuiltinTy::Label => "label",
             BuiltinTy::CiteLabel => "cite-label",
             BuiltinTy::RefLabel => "ref-label",
             BuiltinTy::Stroke => "stroke",
@@ -334,16 +348,18 @@ impl BuiltinTy {
             BuiltinTy::Inset => "inset",
             BuiltinTy::Outset => "outset",
             BuiltinTy::Radius => "radius",
+            BuiltinTy::TypeType(..) => "type",
             BuiltinTy::Type(ty) => ty.short_name(),
             BuiltinTy::Element(ty) => ty.name(),
             BuiltinTy::Tag(tag) => {
                 let (name, id) = tag.as_ref();
                 return if let Some(id) = id {
-                    format!("tag {name} of {id:?}")
+                    eco_format!("tag {name} of {id:?}")
                 } else {
-                    format!("tag {name}")
+                    eco_format!("tag {name}")
                 };
             }
+            BuiltinTy::Module(m) => return eco_format!("module({})", m.name()),
             BuiltinTy::Path(s) => match s {
                 PathPreference::None => "[any]",
                 PathPreference::Special => "[any]",
@@ -361,7 +377,7 @@ impl BuiltinTy {
             },
         };
 
-        res.to_string()
+        res.into()
     }
 }
 
@@ -420,7 +436,6 @@ macro_rules! flow_record {
                 (
                     $name.into(),
                     $ty,
-                    Span::detached(),
                 ),
             )*
         ])
@@ -607,7 +622,8 @@ pub static FLOW_RADIUS_DICT: Lazy<Interned<RecordTy>> = Lazy::new(|| {
 
 #[cfg(test)]
 mod tests {
-    use reflexo::vector::ir::DefId;
+
+    use crate::syntax::Decl;
 
     use super::{SigTy, Ty, TypeVar};
 
@@ -617,8 +633,8 @@ mod tests {
     // instantiate a `v` as the return type of the map function.
     #[test]
     fn test_map() {
-        let u = Ty::Var(TypeVar::new("u".into(), DefId(0)));
-        let v = Ty::Var(TypeVar::new("v".into(), DefId(1)));
+        let u = Ty::Var(TypeVar::new("u".into(), Decl::lit("u").into()));
+        let v = Ty::Var(TypeVar::new("v".into(), Decl::lit("v").into()));
         let mapper_fn =
             Ty::Func(SigTy::new([u].into_iter(), None, None, None, Some(v.clone())).into());
         let map_fn =

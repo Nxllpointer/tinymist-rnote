@@ -24,7 +24,7 @@ use sync_lsp::{
     LspBuilder, LspClientRoot, LspResult,
 };
 use tinymist::{CompileConfig, Config, LanguageState, RegularInit, SuperInit, UserActionTask};
-use tinymist_query::docs::PackageInfo;
+use tinymist_query::package::PackageInfo;
 use typst::foundations::IntoValue;
 use typst_shim::utils::LazyHash;
 
@@ -64,10 +64,12 @@ fn main() -> anyhow::Result<()> {
         env_logger::builder()
             .filter_module("tinymist", Info)
             .filter_module("typst_preview", Debug)
-            .filter_module("typst_ts", Info)
+            .filter_module("typlite", Info)
+            .filter_module("reflexo", Info)
             .filter_module("sync_lsp", Info)
-            .filter_module("typst_ts_compiler::service::compile", Info)
-            .filter_module("typst_ts_compiler::service::watch", Info)
+            .filter_module("reflexo_typst::service::compile", Info)
+            .filter_module("reflexo_typst::service::watch", Info)
+            .filter_module("reflexo_typst::diag::console", Info)
             .try_init()
     };
 
@@ -102,14 +104,14 @@ pub fn completion(args: ShellCompletionArgs) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The main entry point for the LSP server.
+/// The main entry point for the language server.
 pub fn lsp_main(args: LspArgs) -> anyhow::Result<()> {
     let pairs = LONG_VERSION.trim().split('\n');
     let pairs = pairs
         .map(|e| e.splitn(2, ":").map(|e| e.trim()).collect::<Vec<_>>())
         .collect::<Vec<_>>();
-    log::info!("tinymist LSP version information: {pairs:?}");
-    log::info!("starting LSP server: {args:#?}");
+    log::info!("tinymist version information: {pairs:?}");
+    log::info!("starting Language server: {args:#?}");
 
     let is_replay = !args.mirror.replay.is_empty();
     with_stdio_transport(args.mirror.clone(), |conn| {
@@ -126,7 +128,7 @@ pub fn lsp_main(args: LspArgs) -> anyhow::Result<()> {
         .start(conn.receiver, is_replay)
     })?;
 
-    log::info!("LSP server did shut down");
+    log::info!("language server did shut down");
     Ok(())
 }
 
@@ -276,6 +278,21 @@ pub fn query_main(cmds: QueryCommands) -> anyhow::Result<()> {
 
                     let output_path = Path::new(&args.output);
                     std::fs::write(output_path, res).map_err(internal_error)?;
+                }
+                QueryCommands::CheckPackage(args) => {
+                    let pkg = PackageSpec::from_str(&args.id).unwrap();
+                    let path = args.path.map(PathBuf::from);
+                    let path = path
+                        .unwrap_or_else(|| w.world.registry.resolve(&pkg).unwrap().as_ref().into());
+
+                    state
+                        .check_package(PackageInfo {
+                            path,
+                            namespace: pkg.namespace,
+                            name: pkg.name,
+                            version: pkg.version.to_string(),
+                        })?
+                        .await?;
                 }
             };
 

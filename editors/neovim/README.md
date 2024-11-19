@@ -42,16 +42,41 @@ To enable LSP, you must install `tinymist`. You can find `tinymist` by:
   }
   ```
 
-## Minimal Setup: LazyVim as an Example
+## Setup
 
-This section shows you a minimal way to setup tinymist in Neovim (LazyVim).
-
-1. Copy or merge the [Autocmds file](https://github.com/Myriad-Dreamin/tinymist/tree/main/editors/neovim/config/autocmds.lua) and [Plugin file](https://github.com/Myriad-Dreamin/tinymist/tree/main/editors/neovim/plugins/tinymist.lua) to corresponding paths into `~/.config/nvim/`.
-
-1. Check and restart Neovim.
+This section shows you a minimal way to setup tinymist in [LazyVim](https://www.lazyvim.org/). For other distros, we also bring some tips for you.
 
 
 Please see [Extra Settings](#extra-settings) for more configuration.
+
+### Setup for [LazyVim](https://www.lazyvim.org/)
+
+Copy or merge the two files to corresponding paths into `~/.config/nvim/`.
+
+- [Autocmds file](https://github.com/Myriad-Dreamin/tinymist/tree/main/editors/neovim/config/autocmds.lua) will help associate `.typ` file extension to `typst` filetype.
+- [Plugin file](https://github.com/Myriad-Dreamin/tinymist/tree/main/editors/neovim/plugins/tinymist.lua) will help start tinymist for buffers with the `typst` filetype.
+
+Then, check and restart Neovim.
+
+### Setup for [AstroVim](https://github.com/AstroNvim)
+
+AstroNvim now uses tinymist by default. Please check the [setup script](https://github.com/AstroNvim/astrocommunity/tree/main/lua/astrocommunity/pack/typst).
+
+### Setup for [coc.nvim](https://github.com/neoclide/coc.nvim)
+
+You can edit the `coc-settings.json` by executing `:CocConfig`:
+
+```json
+{
+  "languageserver": {
+    "tinymist": {
+      "command": "tinymist",
+      "filetypes": ["typst"],
+      "settings": { ... }
+    }
+  }
+}
+```
 
 ## Tips
 
@@ -93,9 +118,9 @@ autocmd BufNewFile,BufRead *.typ setfiletype typst
 
 ## Extra Settings
 
-### Configuring LSP Server
+### Configuring Language Server
 
-To configure LSP server, you can edit the `opts.servers.tinymist.settings`. For example, if you want to export PDF on typing and output files in `$root_dir/target` directory:
+To configure language server, you can edit the `opts.servers.tinymist.settings`. For example, if you want to export PDF on typing and output files in `$root_dir/target` directory:
 
 ```lua
 return {
@@ -124,7 +149,7 @@ Enable LSP-based folding range with `kevinhwang91/nvim-ufo`:
 
 ```lua
 return {
-  { -- configure LSP servers
+  { -- configure language servers
     "neovim/nvim-lspconfig",
     dependencies = "kevinhwang91/nvim-ufo", -- enable LSP-based folds
   },

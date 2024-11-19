@@ -29,8 +29,8 @@ your PATH and `typst-lsp` in your `PATH` to the `typst-ts-mode` entry of `eglot-
 
 == Extra Settings
 <extra-settings>
-=== Configuring LSP Server
-<configuring-lsp-server>
+=== Configuring Language Server
+<configuring-language-server>
 
 You can either use `eglot-workspace-configuration` or specifying launch
 arguments for `tinymist`.
@@ -42,24 +42,7 @@ For example, if you want to export PDF on save:
 
 ```el
   (setq-default eglot-workspace-configuration
-                '(:exportPdf "onSave"))
-```
-
-Here is an example for both configuring `pylsp` and `tinymist`
-
-```el
-  (setq-default eglot-workspace-configuration
-                '(:pylsp (:plugins (:ruff (:enabled t)))
-                         :exportPdf "onSave"))
-```
-
-NOTE: Currently, `tinymist` doesn't support having its name as the top-level
-configuration entry, so the following configuration won't work:
-
-```el
-  (setq-default eglot-workspace-configuration
-                '(:pylsp (:plugins (:ruff (:enabled t)))
-                  :tinymist (:exportPdf "onSave")))
+                '(:tinymist (:exportPdf "onSave")))
 ```
 
 You can also have configuration per directory. Be sure to look at the

@@ -1,58 +1,38 @@
 use core::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::{
     collections::{HashMap, HashSet},
     ops::Range,
     path::{Path, PathBuf},
 };
 
-use ecow::EcoVec;
 use once_cell::sync::Lazy;
-use reflexo_typst::package::{PackageRegistry, PackageSpec};
 use reflexo_typst::world::EntryState;
-use reflexo_typst::{CompileDriverImpl, EntryManager, EntryReader, ShadowApi, WorldDeps};
+use reflexo_typst::{CompileDriverImpl, EntryManager, EntryReader, ShadowApi};
 use serde_json::{ser::PrettyFormatter, Serializer, Value};
 use tinymist_world::CompileFontArgs;
+use typst::foundations::Bytes;
 use typst::syntax::ast::{self, AstNode};
 use typst::syntax::{FileId as TypstFileId, LinkedNode, Source, SyntaxKind, VirtualPath};
-use typst::{diag::PackageError, foundations::Bytes};
 
 pub use insta::assert_snapshot;
 pub use serde::Serialize;
 pub use serde_json::json;
-pub use tinymist_world::{LspUniverse, LspUniverseBuilder, LspWorld};
+pub use tinymist_world::{LspUniverse, LspUniverseBuilder};
 use typst_shim::syntax::LinkedNodeExt;
 
+use crate::syntax::find_module_level_docs;
+use crate::LspWorldExt;
 use crate::{
-    analysis::{Analysis, AnalysisResources},
-    prelude::AnalysisContext,
-    typst_to_lsp, LspPosition, PositionEncoding, VersionedDocument,
+    analysis::Analysis, prelude::LocalContext, typst_to_lsp, LspPosition, PositionEncoding,
+    VersionedDocument,
 };
 
 type CompileDriver<C> = CompileDriverImpl<C, tinymist_world::LspCompilerFeat>;
 
-struct WrapWorld<'a>(&'a mut LspWorld);
+pub fn snapshot_testing(name: &str, f: &impl Fn(&mut LocalContext, PathBuf)) {
+    let name = if name.is_empty() { "playground" } else { name };
 
-impl<'a> AnalysisResources for WrapWorld<'a> {
-    fn world(&self) -> &LspWorld {
-        self.0
-    }
-
-    fn resolve(&self, spec: &PackageSpec) -> Result<std::sync::Arc<Path>, PackageError> {
-        self.0.registry.resolve(spec)
-    }
-
-    fn dependencies(&self) -> EcoVec<reflexo::ImmutPath> {
-        let mut v = EcoVec::new();
-        self.0.iter_dependencies(&mut |p| {
-            v.push(p);
-        });
-
-        v
-    }
-}
-
-pub fn snapshot_testing(name: &str, f: &impl Fn(&mut AnalysisContext, PathBuf)) {
     let mut settings = insta::Settings::new();
     settings.set_prepend_module_to_snapshot(false);
     settings.set_snapshot_path(format!("fixtures/{name}/snaps"));
@@ -73,7 +53,7 @@ pub fn snapshot_testing(name: &str, f: &impl Fn(&mut AnalysisContext, PathBuf)) 
 pub fn run_with_ctx<T>(
     w: &mut LspUniverse,
     p: PathBuf,
-    f: &impl Fn(&mut AnalysisContext, PathBuf) -> T,
+    f: &impl Fn(&mut LocalContext, PathBuf) -> T,
 ) -> T {
     let root = w.workspace_root().unwrap();
     let paths = w
@@ -81,10 +61,23 @@ pub fn run_with_ctx<T>(
         .into_iter()
         .map(|p| TypstFileId::new(None, VirtualPath::new(p.strip_prefix(&root).unwrap())))
         .collect::<Vec<_>>();
-    let mut w = w.snapshot();
-    let w = WrapWorld(&mut w);
-    let a = Analysis::default();
-    let mut ctx = AnalysisContext::new(root, &w, &a);
+
+    let w = w.snapshot();
+
+    let source = w.source_by_path(&p).ok().unwrap();
+    let docs = find_module_level_docs(&source).unwrap_or_default();
+    let properties = get_test_properties(&docs);
+    let supports_html = properties
+        .get("html")
+        .map(|v| v.trim() == "true")
+        .unwrap_or(true);
+
+    let mut ctx = Arc::new(Analysis {
+        remove_html: !supports_html,
+        ..Analysis::default()
+    })
+    .snapshot(w);
+
     ctx.test_completion_files(Vec::new);
     ctx.test_files(|| paths);
     f(&mut ctx, p)
@@ -95,14 +88,16 @@ pub fn get_test_properties(s: &str) -> HashMap<&'_ str, &'_ str> {
     for line in s.lines() {
         let mut line = line.splitn(2, ':');
         let key = line.next().unwrap().trim();
-        let value = line.next().unwrap().trim();
-        props.insert(key, value);
+        let Some(value) = line.next() else {
+            continue;
+        };
+        props.insert(key, value.trim());
     }
     props
 }
 
 pub fn compile_doc_for_test(
-    ctx: &mut AnalysisContext,
+    ctx: &mut LocalContext,
     properties: &HashMap<&str, &str>,
 ) -> Option<VersionedDocument> {
     let must_compile = properties
@@ -129,6 +124,7 @@ pub fn run_with_sources<T>(source: &str, f: impl FnOnce(&mut LspUniverse, PathBu
     };
     let mut world = LspUniverseBuilder::build(
         EntryState::new_rooted(root.as_path().into(), None),
+        Default::default(),
         Arc::new(
             LspUniverseBuilder::resolve_fonts(CompileFontArgs {
                 ignore_system_fonts: true,
@@ -136,8 +132,7 @@ pub fn run_with_sources<T>(source: &str, f: impl FnOnce(&mut LspUniverse, PathBu
             })
             .unwrap(),
         ),
-        Default::default(),
-        None,
+        LspUniverseBuilder::resolve_package(None, None),
     )
     .unwrap();
     let sources = source.split("-----");
@@ -150,7 +145,7 @@ pub fn run_with_sources<T>(source: &str, f: impl FnOnce(&mut LspUniverse, PathBu
 
         if source.starts_with("//") {
             let first_line = source.lines().next().unwrap();
-            let content = first_line.strip_prefix("//").unwrap().trim();
+            let content = first_line.trim_start_matches("/").trim();
 
             if let Some(path_attr) = content.strip_prefix("path:") {
                 source = source.strip_prefix(first_line).unwrap().trim();
@@ -192,7 +187,7 @@ pub fn find_test_range(s: &Source) -> Range<usize> {
     }
     let (re_base, re_len, is_after) = find_prefix(s.text(), "/* range after ", true)
         .or_else(|| find_prefix(s.text(), "/* range ", false))
-        .unwrap();
+        .unwrap_or_else(|| panic!("no range marker found in source:\n{}", s.text()));
     let re_end = re_base + re_len;
     let range_rng = re_end..(s.text()[re_end..].find(" */").unwrap() + re_end);
     let range_base = if is_after {
@@ -317,6 +312,7 @@ pub fn find_test_position_(s: &Source, offset: usize) -> LspPosition {
 pub static REDACT_LOC: Lazy<RedactFields> = Lazy::new(|| {
     RedactFields::from_iter([
         "location",
+        "contents",
         "uri",
         "oldUri",
         "newUri",
@@ -408,6 +404,18 @@ impl Redact for RedactFields {
                                 k.to_owned(),
                                 format!("{}:{}", pos(&t["start"]), pos(&t["end"])).into(),
                             );
+                        }
+                        "contents" => {
+                            let res = t.as_str().unwrap();
+                            static REG: OnceLock<regex::Regex> = OnceLock::new();
+                            let reg = REG.get_or_init(|| {
+                                regex::Regex::new(r#"data:image/svg\+xml;base64,([^"]+)"#).unwrap()
+                            });
+                            let res = reg.replace_all(res, |_captures: &regex::Captures| {
+                                "data:image-hash/svg+xml;base64,redacted"
+                            });
+
+                            m.insert(k.to_owned(), res.into());
                         }
                         _ => {}
                     }

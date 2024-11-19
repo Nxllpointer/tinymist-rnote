@@ -1,3 +1,4 @@
+import { base64Decode } from "../utils";
 import "./docs.css";
 import van, { State, ChildDom } from "vanjs-core";
 const { div, h1, h2, h3, code, a, p, i, span, strong } = van.tags;
@@ -18,7 +19,7 @@ export const Docs = () => {
   van.derive(async () => {
     const inp = favoritePlaceholders.startsWith(":")
       ? docsMock
-      : decodeURIComponent(atob(favoritePlaceholders));
+      : base64Decode(favoritePlaceholders);
     if (!inp) {
       return;
     }
@@ -37,7 +38,7 @@ export const Docs = () => {
       },
       (_dom?: Element) => {
         const v = parsedDocs.val;
-        console.log("updated", v);
+        // console.log("updated", v);
         return div(MakeDoc(v));
       }
     )
@@ -212,7 +213,7 @@ async function recoverDocsStructure(content: string) {
         current = structStack.pop()!;
         break;
       case TokenKind.Comment:
-        console.log("Comment", token[1]);
+        // console.log("Comment", token[1]);
         break;
       case TokenKind.Text:
         current.contents.push(token[1]);
@@ -297,7 +298,7 @@ function MakeDoc(root: DocElement) {
   // module-symbol-module-src.lib-barchart
   getKnownPackages(root);
   processInternalModules(root);
-  console.log("MakeDoc", root, knownFiles, knownPackages);
+  // console.log("MakeDoc", root, knownFiles, knownPackages);
 
   function getKnownPackages(v: DocElement) {
     for (const child of v.children) {
@@ -390,7 +391,7 @@ function MakeDoc(root: DocElement) {
   }
 
   function ShortItemDoc(v: DocElement): ChildDom[] {
-    console.log("item ref to ", v);
+    // console.log("item ref to ", v);
     return [ItemDoc(v)];
   }
 
@@ -483,7 +484,7 @@ function MakeDoc(root: DocElement) {
     const fileLoc = v.data.loc;
     const fid = genFileId(knownFiles[fileLoc]);
     const isInternal = knownFiles[fileLoc]?.isInternal;
-    console.log("ModuleItem", v, fid);
+    // console.log("ModuleItem", v, fid);
 
     const title = [];
     if (isInternal) {
@@ -509,7 +510,7 @@ function MakeDoc(root: DocElement) {
   }
 
   function PackageItem(v: DocElement) {
-    console.log("PackageItem", v);
+    // console.log("PackageItem", v);
     return div(
       h1(`@${v.data.namespace}/${v.data.name}:${v.data.version}`),
       p(
@@ -611,9 +612,7 @@ function MakeDoc(root: DocElement) {
   function FuncItem(v: DocElement) {
     const sig = v.data?.parsed_docs as DocSignature | undefined;
 
-    const export_again = v.data.export_again
-      ? [kwHl("external"), code(" ")]
-      : [];
+    const is_external = v.data.is_external ? [kwHl("external"), code(" ")] : [];
     // symbol-function-src.draw.grouping-place-anchors
     const name = a(
       {
@@ -621,7 +620,7 @@ function MakeDoc(root: DocElement) {
       },
       code(v.data.name)
     );
-    let funcTitle = [...export_again, name];
+    let funcTitle = [...is_external, name];
     if (sig) {
       funcTitle.push(code("("));
       // funcTitle.push(...sig.pos.map((e: DocParam) => code(e.name)));
@@ -656,7 +655,7 @@ function MakeDoc(root: DocElement) {
         h3({ class: "doc-symbol-name" }, code(...funcTitle))
       ),
       ...SigPreview(v),
-      ...(v.data.export_again ? ShortItemDoc(v) : [ItemDoc(v), ...SigDocs(v)])
+      ...(v.data.is_external ? ShortItemDoc(v) : [ItemDoc(v), ...SigDocs(v)])
     );
   }
 
@@ -820,7 +819,7 @@ function MakeDoc(root: DocElement) {
     // }),
     // http://localhost:5173/#symbol-function-src.lib.draw-copy-anchors
     // http://localhost:5173/#symbol-function-src.draw.grouping-copy-anchors
-    const export_again = v.data.export_again
+    const is_external = v.data.is_external
       ? [
           a(
             {
@@ -834,7 +833,7 @@ function MakeDoc(root: DocElement) {
       : [];
 
     const sigTitle = [
-      ...export_again,
+      ...is_external,
       kwHl("let"),
       code(" "),
       code(fnHl(v.data.name)),

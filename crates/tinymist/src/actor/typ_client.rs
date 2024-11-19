@@ -22,33 +22,22 @@
 //!
 //! The [`CompileHandler`] will push information to other actors.
 
-use std::{
-    collections::HashMap,
-    ops::Deref,
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::{collections::HashMap, ops::Deref, sync::Arc};
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use log::{error, info, trace};
 use reflexo_typst::{
-    debug_loc::DataSource, error::prelude::*, typst::prelude::*, vfs::notify::MemoryEvent,
-    world::EntryState, CompileReport, EntryReader, Error, ImmutPath, TaskInputs, TypstFont,
+    error::prelude::*, typst::prelude::*, vfs::notify::MemoryEvent, world::EntryState,
+    CompileReport, EntryReader, Error, ImmutPath, TaskInputs,
 };
 use sync_lsp::{just_future, QueryFuture};
 use tinymist_query::{
-    analysis::{Analysis, AnalysisContext, AnalysisResources},
-    CompilerQueryResponse, DiagnosticsMap, ExportKind, SemanticRequest, ServerInfoResponse,
-    StatefulRequest, VersionedDocument,
+    analysis::{Analysis, AnalysisRevLock, LocalContextGuard},
+    CompilerQueryRequest, CompilerQueryResponse, DiagnosticsMap, OnExportRequest, SemanticRequest,
+    ServerInfoResponse, StatefulRequest, VersionedDocument,
 };
-use tinymist_render::PeriscopeRenderer;
 use tokio::sync::{mpsc, oneshot};
-use typst::{
-    diag::{PackageError, SourceDiagnostic},
-    layout::Position,
-    syntax::package::PackageSpec,
-    World as TypstWorld,
-};
+use typst::{diag::SourceDiagnostic, World};
 
 use super::{
     editor::{DocVersion, EditorRequest, TinymistCompileStatusEnum},
@@ -57,6 +46,7 @@ use super::{
     },
 };
 use crate::{
+    stats::{CompilerQueryStats, QueryStatGuard},
     task::{ExportTask, ExportUserConfig},
     world::{LspCompilerFeat, LspWorld},
     CompileConfig,
@@ -66,8 +56,8 @@ type EditorSender = mpsc::UnboundedSender<EditorRequest>;
 
 pub struct CompileHandler {
     pub(crate) diag_group: String,
-    pub(crate) analysis: Analysis,
-    pub(crate) periscope: PeriscopeRenderer,
+    pub(crate) analysis: Arc<Analysis>,
+    pub(crate) stats: CompilerQueryStats,
 
     #[cfg(feature = "preview")]
     pub(crate) inner: Arc<parking_lot::RwLock<Option<Arc<typst_preview::CompileWatcher>>>>,
@@ -81,13 +71,26 @@ pub struct CompileHandler {
 
 impl CompileHandler {
     /// Snapshot the compiler thread for tasks
-    pub fn snapshot(&self) -> ZResult<QuerySnap> {
+    pub fn snapshot(&self) -> ZResult<WorldSnapFut> {
         let (tx, rx) = oneshot::channel();
         self.intr_tx
             .send(Interrupt::SnapshotRead(tx))
             .map_err(map_string_err("failed to send snapshot request"))?;
 
-        Ok(QuerySnap { rx })
+        Ok(WorldSnapFut { rx })
+    }
+
+    /// Snapshot the compiler thread for language queries
+    pub fn query_snapshot(&self, q: Option<&CompilerQueryRequest>) -> ZResult<QuerySnapFut> {
+        let fut = self.snapshot()?;
+        let analysis = self.analysis.clone();
+        let rev_lock = analysis.lock_revision(q);
+
+        Ok(QuerySnapFut {
+            fut,
+            analysis,
+            rev_lock,
+        })
     }
 
     /// Get latest artifact the compiler thread for tasks
@@ -140,122 +143,18 @@ impl CompileHandler {
         let revision = world.revision().get();
         trace!("notify diagnostics({revision}): {errors:#?} {warnings:#?}");
 
-        let diagnostics = self.run_analysis(world, |ctx| {
-            tinymist_query::convert_diagnostics(ctx, errors.iter().chain(warnings.iter()))
-        });
+        let diagnostics = tinymist_query::convert_diagnostics(
+            world,
+            errors.iter().chain(warnings.iter()),
+            self.analysis.position_encoding,
+        );
 
-        match diagnostics {
-            Ok(diagnostics) => {
-                let entry = world.entry_state();
-                // todo: better way to remove diagnostics
-                // todo: check all errors in this file
-                let detached = entry.is_inactive();
-                let valid = !detached;
-                self.push_diagnostics(revision, valid.then_some(diagnostics));
-            }
-            Err(err) => {
-                error!("TypstActor: failed to convert diagnostics: {:#}", err);
-                self.push_diagnostics(revision, None);
-            }
-        }
-    }
-
-    pub fn run_stateful<T: StatefulRequest>(
-        &self,
-        snap: CompileSnapshot<LspCompilerFeat>,
-        query: T,
-        wrapper: fn(Option<T::Response>) -> CompilerQueryResponse,
-    ) -> anyhow::Result<CompilerQueryResponse> {
-        let w = &snap.world;
-        let doc = snap.success_doc.map(|doc| VersionedDocument {
-            version: w.revision().get(),
-            document: doc,
-        });
-        self.run_analysis(w, |ctx| query.request(ctx, doc))
-            .map(wrapper)
-    }
-
-    pub fn run_semantic<T: SemanticRequest>(
-        &self,
-        snap: CompileSnapshot<LspCompilerFeat>,
-        query: T,
-        wrapper: fn(Option<T::Response>) -> CompilerQueryResponse,
-    ) -> anyhow::Result<CompilerQueryResponse> {
-        self.run_analysis(&snap.world, |ctx| query.request(ctx))
-            .map(wrapper)
-    }
-
-    pub fn run_analysis<T>(
-        &self,
-        w: &LspWorld,
-        f: impl FnOnce(&mut AnalysisContext<'_>) -> T,
-    ) -> anyhow::Result<T> {
-        let Some(main) = w.main_id() else {
-            error!("TypstActor: main file is not set");
-            bail!("main file is not set");
-        };
-        let Some(root) = w.entry_state().root() else {
-            error!("TypstActor: root is not set");
-            bail!("root is not set");
-        };
-        w.source(main).map_err(|err| {
-            info!("TypstActor: failed to prepare main file: {err:?}");
-            anyhow!("failed to get source: {err}")
-        })?;
-
-        struct WrapWorld<'a>(&'a LspWorld, &'a PeriscopeRenderer);
-
-        impl<'a> AnalysisResources for WrapWorld<'a> {
-            fn world(&self) -> &LspWorld {
-                self.0
-            }
-
-            fn resolve(&self, spec: &PackageSpec) -> Result<Arc<Path>, PackageError> {
-                use reflexo_typst::world::package::PackageRegistry;
-                self.0.registry.resolve(spec)
-            }
-
-            fn dependencies(&self) -> EcoVec<ImmutPath> {
-                use reflexo_typst::WorldDeps;
-                let mut deps = EcoVec::new();
-                self.0.iter_dependencies(&mut |dep| {
-                    deps.push(dep);
-                });
-
-                deps
-            }
-
-            /// Resolve extra font information.
-            fn font_info(&self, font: TypstFont) -> Option<Arc<DataSource>> {
-                self.0.font_resolver.describe_font(&font)
-            }
-
-            /// Get the local packages and their descriptions.
-            fn local_packages(&self) -> EcoVec<PackageSpec> {
-                crate::tool::package::list_package_by_namespace(
-                    &self.0.registry,
-                    eco_format!("local"),
-                )
-                .into_iter()
-                .map(|(_, spec)| spec)
-                .collect()
-            }
-
-            /// Resolve periscope image at the given position.
-            fn periscope_at(
-                &self,
-                ctx: &mut AnalysisContext,
-                doc: VersionedDocument,
-                pos: Position,
-            ) -> Option<String> {
-                self.1.render_marked(ctx, doc, pos)
-            }
-        }
-
-        let w = WrapWorld(w, &self.periscope);
-
-        let mut analysis = self.analysis.snapshot(root, &w);
-        Ok(f(&mut analysis))
+        let entry = world.entry_state();
+        // todo: better way to remove diagnostics
+        // todo: check all errors in this file
+        let detached = entry.is_inactive();
+        let valid = !detached;
+        self.push_diagnostics(revision, valid.then_some(diagnostics));
     }
 
     // todo: multiple preview support
@@ -384,8 +283,22 @@ impl CompileClientActor {
     }
 
     /// Snapshot the compiler thread for tasks
-    pub fn snapshot(&self) -> ZResult<QuerySnap> {
+    pub fn snapshot(&self) -> ZResult<WorldSnapFut> {
         self.handle.clone().snapshot()
+    }
+
+    /// Snapshot the compiler thread for language queries
+    pub fn query_snapshot(&self) -> ZResult<QuerySnapFut> {
+        self.handle.clone().query_snapshot(None)
+    }
+
+    /// Snapshot the compiler thread for language queries
+    pub fn query_snapshot_with_stat(&self, q: &CompilerQueryRequest) -> ZResult<QuerySnapWithStat> {
+        let name: &'static str = q.into();
+        let path = q.associated_path();
+        let stat = self.handle.stats.query_stat(path, name);
+        let fut = self.handle.clone().query_snapshot(Some(q))?;
+        Ok(QuerySnapWithStat { fut, stat })
     }
 
     pub fn add_memory_changes(&self, event: MemoryEvent) {
@@ -404,13 +317,30 @@ impl CompileClientActor {
         self.handle.export.change_config(config);
     }
 
-    pub fn on_export(&self, kind: ExportKind, path: PathBuf) -> QueryFuture {
+    pub fn on_export(&self, req: OnExportRequest) -> QueryFuture {
+        let OnExportRequest { path, kind, open } = req;
         let snap = self.snapshot()?;
 
         let entry = self.config.determine_entry(Some(path.as_path().into()));
         let export = self.handle.export.oneshot(snap, Some(entry), kind);
         just_future(async move {
             let res = export.await?;
+
+            // See https://github.com/Myriad-Dreamin/tinymist/issues/837
+            // Also see https://github.com/Byron/open-rs/issues/105
+            #[cfg(not(target_os = "windows"))]
+            let do_open = ::open::that_detached;
+            #[cfg(target_os = "windows")]
+            fn do_open(path: impl AsRef<std::ffi::OsStr>) -> std::io::Result<()> {
+                ::open::with_detached(path, "explorer")
+            }
+
+            if let Some(Some(path)) = open.then_some(res.as_ref()) {
+                log::info!("open with system default apps: {path:?}");
+                if let Err(e) = do_open(path) {
+                    log::error!("failed to open with system default apps: {e}");
+                };
+            }
 
             log::info!("CompileActor: on export end: {path:?} as {res:?}");
             Ok(tinymist_query::CompilerQueryResponse::OnExport(res))
@@ -457,12 +387,15 @@ impl CompileClientActor {
         Ok(true)
     }
 
-    pub fn clear_cache(&self) {
+    pub fn clear_cache(&mut self) {
         self.handle.analysis.clear_cache();
     }
 
     pub fn collect_server_info(&self) -> QueryFuture {
         let dg = self.handle.diag_group.clone();
+        let api_stats = self.handle.stats.report();
+        let query_stats = self.handle.analysis.report_query_stats();
+        let alloc_stats = self.handle.analysis.report_alloc_stats();
 
         let snap = self.snapshot()?;
         just_future(async move {
@@ -473,11 +406,10 @@ impl CompileClientActor {
                 root: w.entry_state().root().map(|e| e.as_ref().to_owned()),
                 font_paths: w.font_resolver.font_paths().to_owned(),
                 inputs: w.inputs().as_ref().deref().clone(),
-                estimated_memory_usage: HashMap::from_iter([
-                    // todo: vfs memory usage
-                    // ("vfs".to_owned(), w.vfs.read().memory_usage()),
-                    // todo: analysis memory usage
-                    // ("analysis".to_owned(), cc.analysis.estimated_memory()),
+                stats: HashMap::from_iter([
+                    ("api".to_owned(), api_stats),
+                    ("query".to_owned(), query_stats),
+                    ("alloc".to_owned(), alloc_stats),
                 ]),
             };
 
@@ -487,16 +419,96 @@ impl CompileClientActor {
     }
 }
 
-pub struct QuerySnap {
+pub struct QuerySnapWithStat {
+    pub fut: QuerySnapFut,
+    pub(crate) stat: QueryStatGuard,
+}
+
+pub struct WorldSnapFut {
     rx: oneshot::Receiver<CompileSnapshot<LspCompilerFeat>>,
 }
 
-impl QuerySnap {
-    /// Snapshot the compiler thread for tasks
+impl WorldSnapFut {
+    /// wait for the snapshot to be ready
     pub async fn receive(self) -> ZResult<CompileSnapshot<LspCompilerFeat>> {
         self.rx
             .await
             .map_err(map_string_err("failed to get snapshot"))
+    }
+}
+
+pub struct QuerySnapFut {
+    fut: WorldSnapFut,
+    analysis: Arc<Analysis>,
+    rev_lock: AnalysisRevLock,
+}
+
+impl QuerySnapFut {
+    /// wait for the snapshot to be ready
+    pub async fn receive(self) -> ZResult<QuerySnap> {
+        let snap = self.fut.receive().await?;
+        Ok(QuerySnap {
+            snap,
+            analysis: self.analysis,
+            rev_lock: self.rev_lock,
+        })
+    }
+}
+
+pub struct QuerySnap {
+    pub snap: CompileSnapshot<LspCompilerFeat>,
+    analysis: Arc<Analysis>,
+    rev_lock: AnalysisRevLock,
+}
+
+impl std::ops::Deref for QuerySnap {
+    type Target = CompileSnapshot<LspCompilerFeat>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.snap
+    }
+}
+
+impl QuerySnap {
+    pub fn task(mut self, inputs: TaskInputs) -> Self {
+        self.snap = self.snap.task(inputs);
+        self
+    }
+
+    pub fn run_stateful<T: StatefulRequest>(
+        self,
+        query: T,
+        wrapper: fn(Option<T::Response>) -> CompilerQueryResponse,
+    ) -> anyhow::Result<CompilerQueryResponse> {
+        let doc = self.snap.success_doc.as_ref().map(|doc| VersionedDocument {
+            version: self.world.revision().get(),
+            document: doc.clone(),
+        });
+        self.run_analysis(|ctx| query.request(ctx, doc))
+            .map(wrapper)
+    }
+
+    pub fn run_semantic<T: SemanticRequest>(
+        self,
+        query: T,
+        wrapper: fn(Option<T::Response>) -> CompilerQueryResponse,
+    ) -> anyhow::Result<CompilerQueryResponse> {
+        self.run_analysis(|ctx| query.request(ctx)).map(wrapper)
+    }
+
+    pub fn run_analysis<T>(self, f: impl FnOnce(&mut LocalContextGuard) -> T) -> anyhow::Result<T> {
+        let w = self.world.as_ref();
+        let Some(main) = w.main_id() else {
+            error!("TypstActor: main file is not set");
+            bail!("main file is not set");
+        };
+        w.source(main).map_err(|err| {
+            info!("TypstActor: failed to prepare main file: {err:?}");
+            anyhow::anyhow!("failed to get source: {err}")
+        })?;
+
+        let mut analysis = self.analysis.snapshot_(w.clone(), self.rev_lock);
+        Ok(f(&mut analysis))
     }
 }
 

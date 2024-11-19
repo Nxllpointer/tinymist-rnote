@@ -46,6 +46,7 @@ import { devKitFeatureActivate } from "./features/dev-kit";
 import { labelFeatureActivate } from "./features/label";
 import { packageFeatureActivate } from "./features/package";
 import { dragAndDropActivate } from "./features/drag-and-drop";
+import { HoverDummyStorage, HoverTmpStorage } from "./features/hover-storage";
 
 export async function activate(context: ExtensionContext): Promise<void> {
   try {
@@ -67,11 +68,30 @@ export async function doActivate(context: ExtensionContext): Promise<void> {
   vscode.commands.executeCommand("setContext", "ext.tinymistActivated", true);
   // Loads configuration
   const config = loadTinymistConfig();
+  // Inform server that we support named completion callback at the client side
+  config.triggerSuggest = true;
+  config.triggerNamedCompletion = true;
+  config.triggerParameterHints = true;
+  config.supportHtmlInMarkdown = true;
   // Sets features
   extensionState.features.preview = config.previewFeature === "enable";
   extensionState.features.devKit = isDevMode || config.devKit === "enable";
   extensionState.features.dragAndDrop = config.dragAndDrop === "enable";
   extensionState.features.onEnter = !!config.onEnterEvent;
+  extensionState.features.renderDocs = config.renderDocs === "enable";
+
+  // Configures advanced language configuration
+  tinymist.configureLanguage(config["typingContinueCommentsOnNewline"]);
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration("tinymist.typingContinueCommentsOnNewline")) {
+        const config = loadTinymistConfig();
+        // Update language configuration
+        tinymist.configureLanguage(config["typingContinueCommentsOnNewline"]);
+      }
+    }),
+  );
+
   // Initializes language client
   const client = initClient(context, config);
   setClient(client);
@@ -102,6 +122,7 @@ export async function doActivate(context: ExtensionContext): Promise<void> {
     previewSetIsTinymist();
     previewActivate(context, false);
   }
+
   // Starts language client
   return await startClient(client, context);
 }
@@ -127,6 +148,10 @@ function initClient(context: ExtensionContext, config: Record<string, any>) {
   const trustedCommands = {
     enabledCommands: ["tinymist.openInternal", "tinymist.openExternal"],
   };
+  const hoverStorage = extensionState.features.renderDocs
+    ? new HoverTmpStorage(context)
+    : new HoverDummyStorage();
+
   const clientOptions: LanguageClientOptions = {
     documentSelector: typstDocumentSelector,
     initializationOptions: config,
@@ -147,12 +172,26 @@ function initClient(context: ExtensionContext, config: Record<string, any>) {
           return hover;
         }
 
+        const hoverHandler = await hoverStorage.startHover();
+
         for (const content of hover.contents) {
           if (content instanceof vscode.MarkdownString) {
             content.isTrusted = trustedCommands;
             content.supportHtml = true;
+
+            if (context.storageUri) {
+              content.baseUri = Uri.joinPath(context.storageUri, "tmp/");
+            }
+
+            // outline all data "data:image/svg+xml;base64," to render huge image correctly
+            content.value = content.value.replace(
+              /\"data\:image\/svg\+xml\;base64,([^\"]*)\"/g,
+              (_, content) => hoverHandler.storeImage(content),
+            );
           }
         }
+
+        await hoverHandler.finish();
         return hover;
       },
     },
@@ -461,6 +500,23 @@ async function commandShow(kind: "Pdf" | "Svg" | "Png", extraOpts?: any): Promis
     return;
   }
 
+  const conf = vscode.workspace.getConfiguration("tinymist");
+  const openIn: string = conf.get("showExportFileIn") || "editorTab";
+
+  // Telling the language server to open the file instead of using
+  // ```
+  // vscode.env.openExternal(exportUri);
+  // ```
+  // , which is buggy.
+  //
+  // See https://github.com/Myriad-Dreamin/tinymist/issues/837
+  // Also see https://github.com/microsoft/vscode/issues/85930
+  const openBySystemDefault = openIn === "systemDefault";
+  if (openBySystemDefault) {
+    extraOpts = extraOpts || {};
+    extraOpts.open = true;
+  }
+
   // only create pdf if it does not exist yet
   const exportPath = await commandExport(kind, extraOpts);
 
@@ -470,37 +526,33 @@ async function commandShow(kind: "Pdf" | "Svg" | "Png", extraOpts?: any): Promis
     return;
   }
 
-  const exportUri = Uri.file(exportPath);
-
-  // find and replace exportUri
-  // todo: we may find them in tabs
-  vscode.window.tabGroups;
-
-  let uriToFind = exportUri.toString();
-  findTab: for (const editor of vscode.window.tabGroups.all) {
-    for (const tab of editor.tabs) {
-      if ((tab.input as any)?.uri?.toString() === uriToFind) {
-        await vscode.window.tabGroups.close(tab, true);
-        break findTab;
-      }
-    }
-  }
-
-  const conf = vscode.workspace.getConfiguration("tinymist");
-  const openIn: string = conf.get("showExportFileIn", "editorTab");
-
   switch (openIn) {
+    case "systemDefault":
+      break;
     default:
-    case "editorTab":
+      vscode.window.showWarningMessage(
+        `Unknown value of "tinymist.showExportFileIn", expected "systemDefault" or "editorTab", got "${openIn}"`,
+      );
+    case "editorTab": {
+      // find and replace exportUri
+      const exportUri = Uri.file(exportPath);
+      let uriToFind = exportUri.toString();
+      findTab: for (const editor of vscode.window.tabGroups.all) {
+        for (const tab of editor.tabs) {
+          if ((tab.input as any)?.uri?.toString() === uriToFind) {
+            await vscode.window.tabGroups.close(tab, true);
+            break findTab;
+          }
+        }
+      }
+
       // here we can be sure that the pdf exists
       await commands.executeCommand("vscode.open", exportUri, {
         viewColumn: ViewColumn.Beside,
         preserveFocus: true,
       } as vscode.TextDocumentShowOptions);
       break;
-    case "systemDefault":
-      await vscode.env.openExternal(exportUri);
-      break;
+    }
   }
 }
 

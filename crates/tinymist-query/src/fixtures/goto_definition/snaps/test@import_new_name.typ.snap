@@ -2,12 +2,13 @@
 source: crates/tinymist-query/src/goto_definition.rs
 expression: "JsonRepr::new_redacted(result, &REDACT_LOC)"
 input_file: crates/tinymist-query/src/fixtures/goto_definition/import_new_name.typ
+snapshot_kind: text
 ---
 [
  {
   "originSelectionRange": "1:23:1:24",
-  "targetRange": "0:22:0:23",
-  "targetSelectionRange": "0:22:0:23",
-  "targetUri": "s1.typ"
+  "targetRange": "0:0:0:0",
+  "targetSelectionRange": "0:0:0:0",
+  "targetUri": "base.typ"
  }
 ]

@@ -19,6 +19,7 @@ pub(crate) use builtin::*;
 pub use def::*;
 pub(crate) use iface::*;
 pub(crate) use mutate::*;
+use reflexo_typst::TypstFileId;
 pub(crate) use select::*;
 pub(crate) use sig::*;
 use typst::foundations::{self, Func, Module, Value};
@@ -29,6 +30,16 @@ pub trait TyCtx {
     fn local_bind_of(&self, _var: &Interned<TypeVar>) -> Option<Ty>;
     /// Get the type of a variable.
     fn global_bounds(&self, _var: &Interned<TypeVar>, _pol: bool) -> Option<TypeBounds>;
+}
+
+impl TyCtx for () {
+    fn local_bind_of(&self, _var: &Interned<TypeVar>) -> Option<Ty> {
+        None
+    }
+
+    fn global_bounds(&self, _var: &Interned<TypeVar>, _pol: bool) -> Option<TypeBounds> {
+        None
+    }
 }
 
 /// A mutable type context.
@@ -71,51 +82,18 @@ pub trait TyCtxMut: TyCtx {
         };
         ty
     }
-}
-
-impl TyCtx for () {
-    fn local_bind_of(&self, _var: &Interned<TypeVar>) -> Option<Ty> {
-        None
-    }
-    fn global_bounds(&self, _var: &Interned<TypeVar>, _pol: bool) -> Option<TypeBounds> {
-        None
-    }
-}
-impl TyCtxMut for () {
-    type Snap = ();
-
-    fn start_scope(&mut self) -> Self::Snap {
-        Self::Snap::default()
-    }
-    fn end_scope(&mut self, _snap: Self::Snap) {}
-
-    fn bind_local(&mut self, _var: &Interned<TypeVar>, _ty: Ty) {}
-    fn type_of_func(&mut self, _func: &Func) -> Option<Interned<SigTy>> {
-        None
-    }
-    fn type_of_value(&mut self, _val: &Value) -> Ty {
-        Ty::Any
-    }
+    /// Check a module item.
+    fn check_module_item(&mut self, module: TypstFileId, key: &StrRef) -> Option<Ty>;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::adt::interner::Interned;
-    use reflexo::vector::ir::DefId;
-    use rustc_hash::FxHasher;
-    use std::hash::{Hash, Hasher};
-
-    /// A convenience function for when you need a quick 64-bit hash.
-    #[inline]
-    pub fn hash64<T: Hash + ?Sized>(v: &T) -> u64 {
-        let mut state = FxHasher::default();
-        v.hash(&mut state);
-        state.finish()
-    }
+    use crate::syntax::Decl;
 
     pub fn var_ins(s: &str) -> Ty {
-        Ty::Var(TypeVar::new(s.into(), DefId(hash64(s))))
+        Ty::Var(TypeVar::new(s.into(), Decl::lit(s).into()))
     }
 
     pub fn str_sig(

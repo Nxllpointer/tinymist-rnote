@@ -4,11 +4,12 @@ use lsp_types::{
 };
 use once_cell::sync::Lazy;
 use regex::{Captures, Regex};
+use typst_shim::syntax::LinkedNodeExt;
 
 use crate::{
     analysis::{BuiltinTy, InsTy, Ty},
     prelude::*,
-    syntax::DerefTarget,
+    syntax::{is_ident_like, DerefTarget},
     upstream::{autocomplete, complete_path, CompletionContext},
     StatefulRequest,
 };
@@ -45,6 +46,14 @@ pub struct CompletionRequest {
     pub position: LspPosition,
     /// Whether the completion is triggered explicitly.
     pub explicit: bool,
+    /// The character that triggered the completion, if any.
+    pub trigger_character: Option<char>,
+    /// Whether to trigger suggest completion, a.k.a. auto-completion.
+    pub trigger_suggest: bool,
+    /// Whether to trigger named parameter completion.
+    pub trigger_named_completion: bool,
+    /// Whether to trigger parameter hint, a.k.a. signature help.
+    pub trigger_parameter_hints: bool,
 }
 
 impl StatefulRequest for CompletionRequest {
@@ -52,7 +61,7 @@ impl StatefulRequest for CompletionRequest {
 
     fn request(
         self,
-        ctx: &mut AnalysisContext,
+        ctx: &mut LocalContext,
         doc: Option<VersionedDocument>,
     ) -> Option<Self::Response> {
         let doc = doc.as_ref().map(|doc| doc.document.as_ref());
@@ -90,13 +99,14 @@ impl StatefulRequest for CompletionRequest {
         }
 
         // Do some completion specific to the deref target
-        let mut match_ident = None;
+        let mut ident_like = None;
         let mut completion_result = None;
         let is_callee = matches!(deref_target, Some(DerefTarget::Callee(..)));
         match deref_target {
-            Some(DerefTarget::Callee(v) | DerefTarget::VarAccess(v)) => {
-                if v.is::<ast::Ident>() {
-                    match_ident = Some(v);
+            Some(DerefTarget::Callee(..) | DerefTarget::VarAccess(..)) => {
+                let node = LinkedNode::new(source.root()).leaf_at_compat(cursor)?;
+                if is_ident_like(&node) {
+                    ident_like = Some(node);
                 }
             }
             Some(DerefTarget::ImportPath(v) | DerefTarget::IncludePath(v)) => {
@@ -114,13 +124,12 @@ impl StatefulRequest for CompletionRequest {
                 let parent = cano_expr.parent()?;
                 if matches!(parent.kind(), SyntaxKind::Named | SyntaxKind::Args) {
                     let ty_chk = ctx.type_check(&source);
-                    if let Some(ty_chk) = ty_chk {
-                        let ty = ty_chk.type_of_span(cano_expr.span());
-                        log::debug!("check string ty: {ty:?}");
-                        if let Some(Ty::Builtin(BuiltinTy::Path(path_filter))) = ty {
-                            completion_result =
-                                complete_path(ctx, Some(cano_expr), &source, cursor, &path_filter);
-                        }
+
+                    let ty = ty_chk.type_of_span(cano_expr.span());
+                    log::debug!("check string ty: {ty:?}");
+                    if let Some(Ty::Builtin(BuiltinTy::Path(path_filter))) = ty {
+                        completion_result =
+                            complete_path(ctx, Some(cano_expr), &source, cursor, &path_filter);
                     }
                 }
             }
@@ -132,7 +141,17 @@ impl StatefulRequest for CompletionRequest {
         let is_incomplete = false;
 
         let mut items = completion_result.or_else(|| {
-            let mut cc_ctx = CompletionContext::new(ctx, doc, &source, cursor, explicit)?;
+            let mut cc_ctx = CompletionContext::new(
+                ctx,
+                doc,
+                &source,
+                cursor,
+                explicit,
+                self.trigger_character,
+                self.trigger_suggest,
+                self.trigger_parameter_hints,
+                self.trigger_named_completion,
+            )?;
 
             // Exclude it self from auto completion
             // e.g. `#let x = (1.);`
@@ -155,9 +174,9 @@ impl StatefulRequest for CompletionRequest {
             let _ = ic;
 
             let replace_range;
-            if match_ident.as_ref().is_some_and(|i| i.offset() == offset) {
-                let match_ident = match_ident.unwrap();
-                let mut rng = match_ident.range();
+            if ident_like.as_ref().is_some_and(|i| i.offset() == offset) {
+                let ident_like = ident_like.unwrap();
+                let mut rng = ident_like.range();
                 let ident_prefix = source.text()[rng.start..cursor].to_string();
 
                 completions.retain(|c| {
@@ -177,7 +196,7 @@ impl StatefulRequest for CompletionRequest {
                 });
 
                 // if modifying some arguments, we need to truncate and add a comma
-                if !is_callee && cursor != rng.end && is_arg_like_context(&match_ident) {
+                if !is_callee && cursor != rng.end && is_arg_like_context(&ident_like) {
                     // extend comma
                     for c in completions.iter_mut() {
                         let apply = match &mut c.apply {
@@ -223,7 +242,12 @@ impl StatefulRequest for CompletionRequest {
                         }
                     }),
                     text_edit: Some(text_edit),
+                    additional_text_edits: typst_completion.additional_text_edits.clone(),
                     insert_text_format: Some(InsertTextFormat::SNIPPET),
+                    commit_characters: typst_completion
+                        .commit_char
+                        .as_ref()
+                        .map(|v| vec![v.to_string()]),
                     command: typst_completion.command.as_ref().map(|c| Command {
                         command: c.to_string(),
                         ..Default::default()
@@ -312,14 +336,19 @@ mod tests {
         pkg_mode: bool,
     }
 
-    fn run(c: TestConfig) -> impl Fn(&mut AnalysisContext, PathBuf) {
-        fn test(ctx: &mut AnalysisContext, id: TypstFileId) {
+    fn run(c: TestConfig) -> impl Fn(&mut LocalContext, PathBuf) {
+        fn test(ctx: &mut LocalContext, id: TypstFileId) {
             let source = ctx.source_by_id(id).unwrap();
             let rng = find_test_range(&source);
             let text = source.text()[rng.clone()].to_string();
 
             let docs = find_module_level_docs(&source).unwrap_or_default();
             let properties = get_test_properties(&docs);
+
+            let trigger_character = properties
+                .get("trigger_character")
+                .map(|v| v.chars().next().unwrap());
+
             let mut includes = HashSet::new();
             let mut excludes = HashSet::new();
 
@@ -373,6 +402,10 @@ mod tests {
                     path: ctx.path_for_id(id).unwrap(),
                     position: ctx.to_lsp_pos(s, &source),
                     explicit: false,
+                    trigger_character,
+                    trigger_suggest: true,
+                    trigger_parameter_hints: true,
+                    trigger_named_completion: true,
                 };
                 results.push(request.request(ctx, doc.clone()).map(|resp| match resp {
                     CompletionResponse::List(l) => CompletionResponse::List(CompletionList {
@@ -411,6 +444,6 @@ mod tests {
 
     #[test]
     fn test_pkgs() {
-        snapshot_testing("completion-pkgs", &run(TestConfig { pkg_mode: true }));
+        snapshot_testing("pkgs", &run(TestConfig { pkg_mode: true }));
     }
 }

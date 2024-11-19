@@ -10,12 +10,13 @@
 mod adt;
 pub mod analysis;
 pub mod docs;
+pub mod package;
 pub mod syntax;
 pub mod ty;
 mod upstream;
 
-pub use analysis::AnalysisContext;
-pub use upstream::with_vm;
+pub use analysis::{LocalContext, LocalContextGuard, LspWorldExt};
+pub use upstream::{with_vm, CompletionFeat, PostfixSnippet};
 
 mod diagnostics;
 pub use diagnostics::*;
@@ -59,8 +60,6 @@ mod rename;
 pub use rename::*;
 mod selection_range;
 pub use selection_range::*;
-mod semantic_tokens;
-pub use semantic_tokens::*;
 mod semantic_tokens_full;
 pub use semantic_tokens_full::*;
 mod semantic_tokens_delta;
@@ -78,8 +77,6 @@ pub use references::*;
 
 mod lsp_typst_boundary;
 pub use lsp_typst_boundary::*;
-mod lsp_features;
-pub use lsp_features::*;
 
 mod prelude;
 
@@ -89,6 +86,8 @@ use typst::{model::Document as TypstDocument, syntax::Source};
 
 /// The physical position in a document.
 pub type FramePosition = typst::layout::Position;
+
+pub use typlite::ColorTheme;
 
 /// A compiled document with an self-incremented logical version.
 #[derive(Debug, Clone)]
@@ -118,7 +117,7 @@ pub trait SemanticRequest {
     type Response;
 
     /// Request the information from the given context.
-    fn request(self, ctx: &mut AnalysisContext) -> Option<Self::Response>;
+    fn request(self, ctx: &mut LocalContext) -> Option<Self::Response>;
 }
 
 /// A request handler with given (semantic) analysis context and a versioned
@@ -130,9 +129,24 @@ pub trait StatefulRequest {
     /// Request the information from the given context.
     fn request(
         self,
-        ctx: &mut AnalysisContext,
+        ctx: &mut LocalContext,
         doc: Option<VersionedDocument>,
     ) -> Option<Self::Response>;
+}
+
+/// Completely disabled log
+#[macro_export]
+macro_rules! log_never {
+    // debug!(target: "my_target", key1 = 42, key2 = true; "a {} event", "log")
+    // debug!(target: "my_target", "a {} event", "log")
+    (target: $target:expr, $($arg:tt)+) => {
+        let _ = format_args!($target, $($arg)+);
+    };
+
+    // debug!("a {} event", "log")
+    ($($arg:tt)+) => {
+        let _ = format_args!($($arg)+);
+    };
 }
 
 #[allow(missing_docs)]
@@ -209,8 +223,12 @@ mod polymorphic {
 
     #[derive(Debug, Clone)]
     pub struct OnExportRequest {
+        /// The path of the document to export.
         pub path: PathBuf,
+        /// The kind of the export.
         pub kind: ExportKind,
+        /// Whether to open the exported file(s) after the export is done.
+        pub open: bool,
     }
 
     #[derive(Debug, Clone)]
@@ -228,7 +246,7 @@ mod polymorphic {
         pub root: Option<PathBuf>,
         pub font_paths: Vec<PathBuf>,
         pub inputs: Dict,
-        pub estimated_memory_usage: HashMap<String, usize>,
+        pub stats: HashMap<String, String>,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -239,7 +257,7 @@ mod polymorphic {
         ContextFreeUnique,
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, strum::IntoStaticStr)]
     pub enum CompilerQueryRequest {
         OnExport(OnExportRequest),
         Hover(HoverRequest),
@@ -298,8 +316,8 @@ mod polymorphic {
                 Self::DocumentSymbol(..) => ContextFreeUnique,
                 Self::WorkspaceLabel(..) => Mergeable,
                 Self::Symbol(..) => Mergeable,
-                Self::SemanticTokensFull(..) => ContextFreeUnique,
-                Self::SemanticTokensDelta(..) => ContextFreeUnique,
+                Self::SemanticTokensFull(..) => PinnedFirst,
+                Self::SemanticTokensDelta(..) => PinnedFirst,
                 Self::Formatting(..) => ContextFreeUnique,
                 Self::FoldingRange(..) => ContextFreeUnique,
                 Self::SelectionRange(..) => ContextFreeUnique,
