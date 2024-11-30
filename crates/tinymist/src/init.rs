@@ -175,7 +175,11 @@ impl Initializer for SuperInit {
                 // position_encoding: Some(cc.position_encoding.into()),
                 hover_provider: Some(HoverProviderCapability::Simple(true)),
                 signature_help_provider: Some(SignatureHelpOptions {
-                    trigger_characters: Some(vec!["(".to_string(), ",".to_string()]),
+                    trigger_characters: Some(vec![
+                        String::from("("),
+                        String::from(","),
+                        String::from(":"),
+                    ]),
                     retrigger_characters: None,
                     work_done_progress_options: WorkDoneProgressOptions {
                         work_done_progress: None,
@@ -293,12 +297,6 @@ pub struct Config {
     pub formatter_mode: FormatterMode,
     /// Dynamic configuration for the experimental formatter.
     pub formatter_print_width: Option<u32>,
-    /// Whether to trigger suggest completion, a.k.a. auto-completion.
-    pub trigger_suggest: bool,
-    /// Whether to trigger named parameter completion.
-    pub trigger_named_completion: bool,
-    /// Whether to trigger parameter hint, a.k.a. signature help.
-    pub trigger_parameter_hints: bool,
     /// Whether to remove html from markup content in responses.
     pub support_html_in_markdown: bool,
     /// Tinymist's completion features.
@@ -362,23 +360,32 @@ impl Config {
     pub fn update_by_map(&mut self, update: &Map<String, JsonValue>) -> anyhow::Result<()> {
         macro_rules! assign_config {
             ($( $field_path:ident ).+ := $bind:literal?: $ty:ty) => {
-                let v = try_(|| <$ty>::deserialize(update.get($bind)?).ok());
+                let v = try_deserialize::<$ty>(update, $bind);
                 self.$($field_path).+ = v.unwrap_or_default();
             };
             ($( $field_path:ident ).+ := $bind:literal: $ty:ty = $default_value:expr) => {
-                let v = try_(|| <$ty>::deserialize(update.get($bind)?).ok());
+                let v = try_deserialize::<$ty>(update, $bind);
                 self.$($field_path).+ = v.unwrap_or_else(|| $default_value);
             };
+        }
+
+        fn try_deserialize<T: serde::de::DeserializeOwned>(
+            map: &Map<String, JsonValue>,
+            key: &str,
+        ) -> Option<T> {
+            T::deserialize(map.get(key)?)
+                .inspect_err(|e| log::warn!("failed to deserialize {key:?}: {e}"))
+                .ok()
         }
 
         assign_config!(semantic_tokens := "semanticTokens"?: SemanticTokensMode);
         assign_config!(formatter_mode := "formatterMode"?: FormatterMode);
         assign_config!(formatter_print_width := "formatterPrintWidth"?: Option<u32>);
-        assign_config!(trigger_suggest := "triggerSuggest"?: bool);
-        assign_config!(trigger_named_completion := "triggerNamedCompletion"?: bool);
-        assign_config!(trigger_parameter_hints := "triggerParameterHints"?: bool);
         assign_config!(support_html_in_markdown := "supportHtmlInMarkdown"?: bool);
         assign_config!(completion := "completion"?: CompletionFeat);
+        assign_config!(completion.trigger_suggest := "triggerSuggest"?: bool);
+        assign_config!(completion.trigger_parameter_hints := "triggerParameterHints"?: bool);
+        assign_config!(completion.trigger_suggest_and_parameter_hints := "triggerSuggestAndParameterHints"?: bool);
         self.compile.update_by_map(update)?;
         self.compile.validate()
     }
@@ -569,9 +576,8 @@ impl CompileConfig {
                 root_dir: command.root,
                 inputs: Arc::new(LazyHash::new(inputs)),
                 font: command.font,
-                package: command.package,
                 creation_timestamp: command.creation_timestamp,
-                cert: command.cert,
+                cert: command.certification,
             });
         }
 
@@ -715,14 +721,6 @@ impl CompileConfig {
         }
 
         opts
-    }
-
-    /// Determines the package options.
-    pub fn determine_package_opts(&self) -> CompilePackageArgs {
-        if let Some(extras) = &self.typst_extra_args {
-            return extras.package.clone();
-        }
-        CompilePackageArgs::default()
     }
 
     /// Determines the font resolver.
@@ -882,8 +880,6 @@ pub struct CompileExtraOpts {
     pub inputs: ImmutDict,
     /// Additional font paths.
     pub font: CompileFontArgs,
-    /// Package related arguments.
-    pub package: CompilePackageArgs,
     /// The creation timestamp for various output.
     pub creation_timestamp: Option<chrono::DateTime<chrono::Utc>>,
     /// Path to certification file

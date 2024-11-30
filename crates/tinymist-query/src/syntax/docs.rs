@@ -14,7 +14,7 @@ use crate::{
     prelude::*,
     syntax::{Decl, DefKind},
     ty::{
-        BuiltinTy, InsTy, Interned, PackageId, SigTy, StrRef, Ty, TypeBounds, TypeVar,
+        BuiltinTy, DynTypeBounds, InsTy, Interned, PackageId, SigTy, StrRef, Ty, TypeVar,
         TypeVarBounds,
     },
 };
@@ -108,7 +108,7 @@ struct DocsChecker<'a> {
 static EMPTY_MODULE: LazyLock<Module> =
     LazyLock::new(|| Module::new("stub", typst::foundations::Scope::new()));
 
-impl<'a> DocsChecker<'a> {
+impl DocsChecker<'_> {
     pub fn check_pat_docs(mut self, docs: String) -> Option<DocString> {
         let converted =
             convert_docs(self.ctx, &docs).and_then(|converted| identify_pat_docs(&converted));
@@ -192,12 +192,12 @@ impl<'a> DocsChecker<'a> {
     fn generate_var(&mut self, name: StrRef) -> Ty {
         self.next_id += 1;
         let encoded = Interned::new(Decl::generated(DefId(self.next_id as u64)));
-        log::debug!("generate var {name:?} {encoded:?}");
+        crate::log_debug_ct!("generate var {name:?} {encoded:?}");
         let var = TypeVar {
             name,
             def: encoded.clone(),
         };
-        let bounds = TypeVarBounds::new(var, TypeBounds::default());
+        let bounds = TypeVarBounds::new(var, DynTypeBounds::default());
         let var = bounds.as_type();
         self.vars.insert(encoded, bounds);
         var
@@ -283,7 +283,7 @@ impl<'a> DocsChecker<'a> {
         }
 
         let v = m.scope().get(name)?;
-        log::debug!("check doc type annotation: {name:?}");
+        crate::log_debug_ct!("check doc type annotation: {name:?}");
         if let Value::Content(c) = v {
             let annotated = c.clone().unpack::<typst::text::RawElem>().ok()?;
             let text = annotated.text().clone().into_value().cast::<Str>().ok()?;
@@ -298,7 +298,7 @@ impl<'a> DocsChecker<'a> {
     }
 
     fn check_type_expr(&mut self, m: &Module, s: ast::Expr) -> Option<Ty> {
-        log::debug!("check doc type expr: {s:?}");
+        crate::log_debug_ct!("check doc type expr: {s:?}");
         match s {
             ast::Expr::Ident(i) => self.check_type_ident(m, i.get().as_str()),
             ast::Expr::None(_)
@@ -352,7 +352,7 @@ impl<'a> DocsChecker<'a> {
                 _ => None,
             },
             ast::Expr::Closure(c) => {
-                log::debug!("check doc closure annotation: {c:?}");
+                crate::log_debug_ct!("check doc closure annotation: {c:?}");
                 let mut pos = vec![];
                 let mut named = BTreeMap::new();
                 let mut rest = None;
@@ -397,7 +397,7 @@ impl<'a> DocsChecker<'a> {
                 sig
             }
             ast::Expr::Dict(d) => {
-                log::debug!("check doc dict annotation: {d:?}");
+                crate::log_debug_ct!("check doc dict annotation: {d:?}");
                 None
             }
             _ => None,

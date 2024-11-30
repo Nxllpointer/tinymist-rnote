@@ -49,7 +49,7 @@ struct TypeSimplifier<'a, 'b> {
     positives: &'b mut FxHashSet<DeclExpr>,
 }
 
-impl<'a, 'b> TypeSimplifier<'a, 'b> {
+impl TypeSimplifier<'_, '_> {
     fn simplify(&mut self, ty: Ty, principal: bool) -> Ty {
         if let Some(cano) = self.cano_cache.get(&(ty.clone(), principal)) {
             return cano.clone();
@@ -164,7 +164,7 @@ impl<'a, 'b> TypeSimplifier<'a, 'b> {
 
     fn transform(&mut self, ty: &Ty, pol: bool) -> Ty {
         match ty {
-            Ty::Let(w) => self.transform_let(w, None, pol),
+            Ty::Let(w) => self.transform_let(w.lbs.iter(), w.ubs.iter(), None, pol),
             Ty::Var(v) => {
                 if let Some(cano) = self.cano_local_cache.get(&(v.def.clone(), self.principal)) {
                     return cano.clone();
@@ -177,7 +177,7 @@ impl<'a, 'b> TypeSimplifier<'a, 'b> {
                     FlowVarKind::Strong(w) | FlowVarKind::Weak(w) => {
                         let w = w.read();
 
-                        self.transform_let(&w, Some(&v.def), pol)
+                        self.transform_let(w.lbs.iter(), w.ubs.iter(), Some(&v.def), pol)
                     }
                 };
 
@@ -251,19 +251,25 @@ impl<'a, 'b> TypeSimplifier<'a, 'b> {
     }
 
     #[allow(clippy::mutable_key_type)]
-    fn transform_let(&mut self, w: &TypeBounds, def_id: Option<&DeclExpr>, pol: bool) -> Ty {
-        let mut lbs = HashSet::with_capacity(w.lbs.len());
-        let mut ubs = HashSet::with_capacity(w.ubs.len());
+    fn transform_let<'a>(
+        &mut self,
+        lbs_iter: impl ExactSizeIterator<Item = &'a Ty>,
+        ubs_iter: impl ExactSizeIterator<Item = &'a Ty>,
+        def_id: Option<&DeclExpr>,
+        pol: bool,
+    ) -> Ty {
+        let mut lbs = HashSet::with_capacity(lbs_iter.len());
+        let mut ubs = HashSet::with_capacity(ubs_iter.len());
 
-        log::debug!("transform let [principal={}] with {w:?}", self.principal);
+        crate::log_debug_ct!("transform let [principal={}]", self.principal);
 
         if !self.principal || ((pol) && !def_id.is_some_and(|i| self.negatives.contains(i))) {
-            for lb in w.lbs.iter() {
+            for lb in lbs_iter {
                 lbs.insert(self.transform(lb, pol));
             }
         }
         if !self.principal || ((!pol) && !def_id.is_some_and(|i| self.positives.contains(i))) {
-            for ub in w.ubs.iter() {
+            for ub in ubs_iter {
                 ubs.insert(self.transform(ub, !pol));
             }
         }
@@ -285,8 +291,6 @@ impl<'a, 'b> TypeSimplifier<'a, 'b> {
         let mut ubs: Vec<_> = ubs.into_iter().collect();
         ubs.sort();
 
-        let mut lbs = lbs.into_iter().collect();
-        let mut ubs = ubs.into_iter().collect();
         Ty::Let(TypeBounds { lbs, ubs }.into())
     }
 

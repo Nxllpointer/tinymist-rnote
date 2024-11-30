@@ -33,11 +33,25 @@ function braceMatch(pattern: RegExp) {
   return ("(?x)" + pattern.source) as unknown as RegExp;
 }
 
+function oneOf(...patterns: RegExp[]) {
+  return new RegExp(
+    patterns
+      .map((p) => {
+        const src = p.source;
+        if (src.startsWith("(")) {
+          return src;
+        }
+
+        return `(?:${src})`;
+      })
+      .join("|")
+  );
+}
+
 const PAREN_BLOCK = generatePattern(6, "\\(", "\\)");
 const exprEndReg =
   /(?<!(?:if|and|or|not|in|!=|==|<=|>=|<|>|\+|-|\*|\/|=|\+=|-=|\*=|\/=)\s*)(?=[\[\{\n])|(?=[;\}\]\)\n]|$)/;
 
-// todo: This is invocable
 const codeBlock: textmate.Pattern = {
   //   name: "meta.block.continuous.typst",
   begin: /\{/,
@@ -139,6 +153,11 @@ const markupBrace: textmate.PatternMatch = {
   match: /[{}()\[\]]/,
 };
 
+const mathBrace: textmate.PatternMatch = {
+  name: "markup.content.brace.typst",
+  match: /[{}]/,
+};
+
 const stringLiteral: textmate.PatternBeginEnd = {
   name: "string.quoted.double.typst",
   begin: /"/,
@@ -182,6 +201,14 @@ const markupMath: textmate.Pattern = {
   },
   patterns: [
     {
+      include: "#math",
+    },
+  ],
+};
+
+const math: textmate.Pattern = {
+  patterns: [
+    {
       include: "#markupEscape",
     },
     {
@@ -193,6 +220,9 @@ const markupMath: textmate.Pattern = {
     // },
     {
       include: "#markupEnterCode",
+    },
+    {
+      include: "#mathBrace",
     },
   ],
 };
@@ -282,8 +312,7 @@ const markup: textmate.Pattern = {
     // },
     ...boldItalicMarkup,
     {
-      name: "markup.underline.link.typst",
-      match: /https?:\/\/[0-9a-zA-Z~\/%#&='',;\.\+\?\-\_]*/,
+      include: "#markupLink",
     },
     {
       include: "#markupMath",
@@ -299,24 +328,25 @@ const markup: textmate.Pattern = {
       name: "punctuation.definition.list.numbered.typst",
       match: /^\s*([0-9]+\.|\+)\s+/,
     },
-    {
-      match: /^\s*(\/)\s+([^:]*)(:)/,
-      captures: {
-        "1": {
-          name: "punctuation.definition.list.description.typst",
-        },
-        "2": {
-          patterns: [
-            {
-              include: "#markup",
-            },
-          ],
-        },
-        "3": {
-          name: "markup.list.term.typst",
-        },
-      },
-    },
+    // The term list parsing is buggy
+    // {
+    //   match: /^\s*(\/)\s+([^:]*)(:)/,
+    //   captures: {
+    //     "1": {
+    //       name: "punctuation.definition.list.description.typst",
+    //     },
+    //     "2": {
+    //       patterns: [
+    //         {
+    //           include: "#markup",
+    //         },
+    //       ],
+    //     },
+    //     "3": {
+    //       name: "markup.list.term.typst",
+    //     },
+    //   },
+    // },
     {
       include: "#markupLabel",
     },
@@ -333,9 +363,21 @@ const enterExpression = (kind: string, seek: RegExp): textmate.Pattern => {
   return {
     /// name: 'markup.expr.typst'
     begin: new RegExp("#" + seek.source),
-    // `?=(?<![\d#])\.[^\p{XID_Start}_]`: This means that we are on a dot and the next character is not a valid identifier start, but we are not at the beginning of hash or number
-    end: /(?<=;)|(?<=[\)\]\}])(?![;\(\[\$])|(?<!#)(?=")|(?=\.(?:[^0-9\p{XID_Start}_]|$))|(?=[\s\}\]\)\$]|$)|(;)/u
-      .source,
+    end: oneOf(
+      /(?<=;)/,
+      // Ends unless we are in a call or method call
+      new RegExp(
+        /(?<=[\)\]\}])(?![;\(\[\$]|(?:\.method-continue))/.source.replace(
+          /method-continue/g,
+          IDENTIFIER.source + /(?=[\(\[])/.source
+        )
+      ),
+      /(?<!#)(?=")/,
+      // This means that we are on a dot and the next character is not a valid identifier start, but we are not at the beginning of hash or number
+      /(?=\.(?:[^0-9\p{XID_Start}_]|$))/u,
+      /(?=[\s\}\]\)\$]|$)/,
+      /(;)/
+    ).source,
     beginCaptures: {
       "0": {
         name: kind,
@@ -614,7 +656,6 @@ const expressions = (): textmate.Grammar => {
         },
       },
       /// parentheisized expressions: (...)
-      // todo: This is invocable
       {
         begin: /\(/,
         end: /\)/,
@@ -658,6 +699,42 @@ const expressions = (): textmate.Grammar => {
       expression,
       arrayOrDict,
       literalContent,
+    },
+  };
+};
+
+const link = (): textmate.Grammar => {
+  const markupLink: textmate.Pattern = {
+    name: "markup.underline.link.typst",
+    begin: /(?:https?):\/\//,
+    end: /(?=[\s\]\)]|(?=[!,.:;?'](?:[\s\]\)]|$)))/,
+    patterns: [
+      { include: "#markupLinkParen" },
+      { include: "#markupLinkBracket" },
+      {
+        match:
+          /(^|\G)(?:[0-9a-zA-Z#$%&*\+\-\/\=\@\_\~]+|(?:[!,.:;?']+(?![\s\]\)]|$)))/,
+      },
+    ],
+  };
+
+  const markupLinkParen: textmate.Pattern = {
+    begin: /\(/,
+    end: /\)|(?=[\s\]])/,
+    patterns: [{ include: "#markupLink" }],
+  };
+
+  const markupLinkBracket: textmate.Pattern = {
+    begin: /\[/,
+    end: /\]|(?=[\s\)])/,
+    patterns: [{ include: "#markupLink" }],
+  };
+
+  return {
+    repository: {
+      markupLink,
+      markupLinkParen,
+      markupLinkBracket,
     },
   };
 };
@@ -812,7 +889,7 @@ const importStatement = (): textmate.Grammar => {
   const importAsClause: textmate.Pattern = {
     // todo: as...
     begin: /(\bas\b)\s*/,
-    end: /(?=[\s;\}\]\)])/,
+    end: /(?=[\s;\}\]\)\:])/,
     beginCaptures: {
       "1": {
         name: "keyword.control.import.typst",
@@ -1204,7 +1281,7 @@ const showStatement = (): textmate.Grammar => {
   const showSubstClause: textmate.Pattern = {
     // name: "meta.show.clause.subst.typst",
     begin: /(\:)\s*/,
-    end: /(?<!:)(?<=\S)(?!\S)|(?=[\n;\}\]\)])/,
+    end: /(?=[\n;\}\]\)])/,
     beginCaptures: {
       "1": {
         name: "punctuation.separator.colon.typst",
@@ -1385,6 +1462,7 @@ export const typst: textmate.Grammar = {
   repository: {
     common,
     markup,
+    math,
     markupEnterCode,
     code,
     keywordConstants,
@@ -1417,8 +1495,10 @@ export const typst: textmate.Grammar = {
     markupBold,
     markupItalic,
     markupMath,
+    ...link().repository,
     markupHeading,
     markupBrace,
+    mathBrace,
 
     ...expressions().repository,
 

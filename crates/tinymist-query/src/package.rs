@@ -8,7 +8,7 @@ use parking_lot::Mutex;
 use reflexo_typst::typst::prelude::*;
 use reflexo_typst::{package::PackageSpec, TypstFileId};
 use serde::{Deserialize, Serialize};
-use tinymist_world::package::HttpsRegistry;
+use tinymist_world::https::HttpsRegistry;
 use typst::diag::{EcoString, StrResult};
 use typst::syntax::package::PackageManifest;
 use typst::syntax::VirtualPath;
@@ -97,7 +97,7 @@ pub fn list_package_by_namespace(
         }
         // namespace/package_name/version
         // 2. package_name
-        let Some(package_names) = once_log(std::fs::read_dir(local_path), "read local pacakge")
+        let Some(package_names) = once_log(std::fs::read_dir(local_path), "read local package")
         else {
             continue;
         };

@@ -38,11 +38,10 @@ pub fn autocomplete(
 ) -> Option<(usize, bool, Vec<Completion>, Vec<lsp_types::CompletionItem>)> {
     let _ = complete_comments(&mut ctx)
         || complete_type(&mut ctx).is_none() && {
-            log::debug!("continue after completing type");
+            crate::log_debug_ct!("continue after completing type");
             complete_labels(&mut ctx)
                 || complete_field_accesses(&mut ctx)
                 || complete_imports(&mut ctx)
-                || complete_rules(&mut ctx)
                 || complete_markup(&mut ctx)
                 || complete_math(&mut ctx)
                 || complete_code(&mut ctx, false)
@@ -341,7 +340,7 @@ fn complete_math(ctx: &mut CompletionContext) -> bool {
 /// Add completions for math snippets.
 #[rustfmt::skip]
 fn math_completions(ctx: &mut CompletionContext) {
-    ctx.scope_completions(true, |_, _| true);
+    ctx.scope_completions(true);
 
     ctx.snippet_completion(
         "subscript",
@@ -589,109 +588,20 @@ fn import_item_completions<'a>(
     }
 }
 
-/// Complete set and show rules.
-fn complete_rules(ctx: &mut CompletionContext) -> bool {
-    let Some(prev) = ctx.leaf.prev_leaf() else {
-        return false;
-    };
-
-    // Behind the set keyword: "set |".
-    if matches!(prev.kind(), SyntaxKind::Set) {
-        ctx.from = if ctx.leaf.kind().is_trivia() {
-            ctx.cursor
-        } else {
-            ctx.leaf.offset()
-        };
-        set_rule_completions(ctx);
-        return true;
-    }
-
-    // Behind the show keyword: "show |".
-    if matches!(prev.kind(), SyntaxKind::Show) {
-        ctx.from = if ctx.leaf.kind().is_trivia() {
-            ctx.cursor
-        } else {
-            ctx.leaf.offset()
-        };
-        show_rule_selector_completions(ctx);
-        return true;
-    }
-
-    // Behind a half-completed show rule: "show strong: |".
-    if_chain! {
-        if let Some(prev) = ctx.leaf.prev_leaf();
-        if matches!(prev.kind(), SyntaxKind::Colon);
-        if matches!(prev.parent_kind(), Some(SyntaxKind::ShowRule));
-        then {
-            ctx.from = if ctx.leaf.kind().is_trivia() {
-                ctx.cursor
-            } else {
-                ctx.leaf.offset()
-            };
-            show_rule_recipe_completions(ctx);
-            return true;
-        }
-    }
-
-    false
-}
-
-/// Add completions for all functions from the global scope.
-fn set_rule_completions(ctx: &mut CompletionContext) {
-    ctx.scope_completions(true, |_, _| true);
-}
-
-/// Add completions for selectors.
-fn show_rule_selector_completions(ctx: &mut CompletionContext) {
-    ctx.scope_completions(false, |_, _| true);
-
-    ctx.snippet_completion(
-        "text selector",
-        "\"${text}\"",
-        "Replace occurrences of specific text.",
-    );
-
-    ctx.snippet_completion(
-        "regex selector",
-        "regex(\"${regex}\")",
-        "Replace matches of a regular expression.",
-    );
-
-    ctx.enrich("", ": ${}");
-}
-
-/// Add completions for recipes.
-fn show_rule_recipe_completions(ctx: &mut CompletionContext) {
-    ctx.snippet_completion(
-        "replacement",
-        "[${content}]",
-        "Replace the selected element with content.",
-    );
-
-    ctx.snippet_completion(
-        "replacement (string)",
-        "\"${text}\"",
-        "Replace the selected element with a string of text.",
-    );
-
-    ctx.snippet_completion(
-        "transformation",
-        "element => [${content}]",
-        "Transform the element with a function.",
-    );
-
-    ctx.scope_completions(false, |_, c| !c.functions.is_empty());
-}
-
 /// Complete in code mode.
 fn complete_code(ctx: &mut CompletionContext, from_type: bool) -> bool {
+    let surrounding_syntax = ctx.surrounding_syntax();
+
     if matches!(
-        ctx.leaf.parent_kind(),
-        None | Some(SyntaxKind::Markup)
-            | Some(SyntaxKind::Math)
-            | Some(SyntaxKind::MathFrac)
-            | Some(SyntaxKind::MathAttach)
-            | Some(SyntaxKind::MathRoot)
+        (ctx.leaf.parent_kind(), surrounding_syntax),
+        (
+            None | Some(SyntaxKind::Markup)
+                | Some(SyntaxKind::Math)
+                | Some(SyntaxKind::MathFrac)
+                | Some(SyntaxKind::MathAttach)
+                | Some(SyntaxKind::MathRoot),
+            SurroundingSyntax::Regular
+        )
     ) {
         return false;
     }
@@ -714,10 +624,11 @@ fn complete_code(ctx: &mut CompletionContext, from_type: bool) -> bool {
     // But not within or after an expression.
     if ctx.explicit
         && (ctx.leaf.kind().is_trivia()
-            || matches!(
+            || (matches!(
                 ctx.leaf.kind(),
                 SyntaxKind::LeftParen | SyntaxKind::LeftBrace
-            ))
+            ) || (matches!(ctx.leaf.kind(), SyntaxKind::Colon)
+                && ctx.leaf.parent_kind() == Some(SyntaxKind::ShowRule))))
     {
         ctx.from = ctx.cursor;
         code_completions(ctx, false);
@@ -730,11 +641,9 @@ fn complete_code(ctx: &mut CompletionContext, from_type: bool) -> bool {
 /// Add completions for expression snippets.
 #[rustfmt::skip]
 fn code_completions(ctx: &mut CompletionContext, hash: bool) {
-    ctx.scope_completions(true, |_value, _| !hash || {
-        // todo: filter code completions
-        // matches!(value, Value::Symbol(_) | Value::Func(_) | Value::Type(_) | Value::Module(_))
-        true
-    });
+    // todo: filter code completions
+    // matches!(value, Value::Symbol(_) | Value::Func(_) | Value::Type(_) | Value::Module(_))
+    ctx.scope_completions(true);
 
     ctx.snippet_completion(
         "function call",
@@ -901,9 +810,6 @@ pub struct CompletionContext<'a> {
     pub cursor: usize,
     pub explicit: bool,
     pub trigger_character: Option<char>,
-    pub trigger_suggest: bool,
-    pub trigger_parameter_hints: bool,
-    pub trigger_named_completion: bool,
     pub from: usize,
     pub from_ty: Option<Ty>,
     pub completions: Vec<Completion>,
@@ -924,9 +830,6 @@ impl<'a> CompletionContext<'a> {
         cursor: usize,
         explicit: bool,
         trigger_character: Option<char>,
-        trigger_suggest: bool,
-        trigger_parameter_hints: bool,
-        trigger_named_completion: bool,
     ) -> Option<Self> {
         let text = source.text();
         let root = LinkedNode::new(source.root());
@@ -941,9 +844,6 @@ impl<'a> CompletionContext<'a> {
             leaf,
             cursor,
             trigger_character,
-            trigger_suggest,
-            trigger_parameter_hints,
-            trigger_named_completion,
             explicit,
             from: cursor,
             from_ty: None,
@@ -985,11 +885,7 @@ impl<'a> CompletionContext<'a> {
             apply: Some(snippet.into()),
             detail: Some(docs.into()),
             label_detail: None,
-            // VS Code doesn't do that... Auto triggering suggestion only happens on typing (word
-            // starts or trigger characters). However, you can use editor.action.triggerSuggest as
-            // command on a suggestion to "manually" retrigger suggest after inserting one
-            command: (self.trigger_suggest && snippet.contains("${"))
-                .then_some("editor.action.triggerSuggest"),
+            command: self.ctx.analysis.trigger_on_snippet(snippet.contains("${")),
             ..Completion::default()
         });
     }
@@ -1184,9 +1080,7 @@ impl<'a> CompletionContext<'a> {
         let mut command = None;
         if parens && matches!(value, Value::Func(_)) {
             if let Value::Func(func) = value {
-                command = self
-                    .trigger_parameter_hints
-                    .then_some("editor.action.triggerParameterHints");
+                command = self.ctx.analysis.trigger_parameter_hints(true);
                 if func
                     .params()
                     .is_some_and(|params| params.iter().all(|param| param.name == "self"))

@@ -21,7 +21,7 @@ use crate::analysis::{func_signature, BuiltinTy, PathPreference, Ty};
 use crate::syntax::{
     descending_decls, interpret_mode_at, is_ident_like, CheckTarget, DescentDecl, InterpretMode,
 };
-use crate::ty::{Iface, IfaceChecker, InsTy, SigTy, TyCtx, TypeBounds, TypeScheme, TypeVar};
+use crate::ty::{DynTypeBounds, Iface, IfaceChecker, InsTy, SigTy, TyCtx, TypeScheme, TypeVar};
 use crate::upstream::complete::complete_code;
 
 use crate::{completion_kind, prelude::*, LspCompletion};
@@ -66,6 +66,20 @@ pub struct PostfixSnippet {
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CompletionFeat {
+    /// Whether to trigger completions on arguments (placeholders) of snippets.
+    #[serde(default)]
+    pub trigger_on_snippet_placeholders: bool,
+    /// Whether supports trigger suggest completion, a.k.a. auto-completion.
+    #[serde(default)]
+    pub trigger_suggest: bool,
+    /// Whether supports trigger parameter hint, a.k.a. signature help.
+    #[serde(default)]
+    pub trigger_parameter_hints: bool,
+    /// Whether supports trigger the command combining suggest and parameter
+    /// hints.
+    #[serde(default)]
+    pub trigger_suggest_and_parameter_hints: bool,
+
     /// Whether to enable postfix completion.
     pub postfix: Option<bool>,
     /// Whether to enable ufcs completion.
@@ -102,24 +116,16 @@ impl CompletionFeat {
     }
 }
 
-impl<'a> CompletionContext<'a> {
+impl CompletionContext<'_> {
     pub fn world(&self) -> &LspWorld {
         self.ctx.world()
-    }
-
-    pub fn scope_completions(
-        &mut self,
-        parens: bool,
-        filter: impl Fn(&Ty, &CompletionKindChecker) -> bool,
-    ) {
-        self.scope_completions_(parens, filter);
     }
 
     fn seen_field(&mut self, field: Interned<str>) -> bool {
         !self.seen_fields.insert(field)
     }
 
-    fn surrounding_syntax(&mut self) -> SurroundingSyntax {
+    pub(crate) fn surrounding_syntax(&mut self) -> SurroundingSyntax {
         check_previous_syntax(&self.leaf)
             .or_else(|| check_surrounding_syntax(&self.leaf))
             .unwrap_or(SurroundingSyntax::Regular)
@@ -186,7 +192,7 @@ impl<'a> CompletionContext<'a> {
         let cursor_mode = interpret_mode_at(Some(node));
         let is_content = value.ty() == Type::of::<Content>()
             || value.ty() == Type::of::<typst::symbols::Symbol>();
-        log::debug!("post snippet is_content: {is_content}");
+        crate::log_debug_ct!("post snippet is_content: {is_content}");
 
         let rng = node.range();
         for snippet in self.ctx.analysis.completion_feat.postfix_snippets() {
@@ -201,7 +207,7 @@ impl<'a> CompletionContext<'a> {
             if !scope {
                 continue;
             }
-            log::debug!("post snippet: {}", snippet.label);
+            crate::log_debug_ct!("post snippet: {}", snippet.label);
 
             static TYPST_SNIPPET_PLACEHOLDER_RE: LazyLock<Regex> =
                 LazyLock::new(|| Regex::new(r"\$\{(.*?)\}").unwrap());
@@ -232,7 +238,7 @@ impl<'a> CompletionContext<'a> {
                     })
                 }
             });
-            log::debug!("post snippet: {} on {:?}", snippet.label, parsed_snippet);
+            crate::log_debug_ct!("post snippet: {} on {:?}", snippet.label, parsed_snippet);
             let Some(ParsedSnippet {
                 node_before,
                 node_before_before_cursor,
@@ -298,7 +304,7 @@ impl<'a> CompletionContext<'a> {
             return;
         };
 
-        log::debug!("defines: {:?}", defines.defines.len());
+        crate::log_debug_ct!("defines: {:?}", defines.defines.len());
         let mut kind_checker = CompletionKindChecker {
             symbols: HashSet::default(),
             functions: HashSet::default(),
@@ -333,19 +339,17 @@ impl<'a> CompletionContext<'a> {
                 label_detail,
                 apply: Some("".into()),
                 // range: Some(range),
-                command: self
-                    .trigger_parameter_hints
-                    .then_some("editor.action.triggerParameterHints"),
+                command: self.ctx.analysis.trigger_on_snippet_with_param_hint(true),
                 ..Default::default()
             };
             let fn_feat = FnCompletionFeat::default().check(kind_checker.functions.iter());
 
-            log::debug!("fn_feat: {name} {ty:?} -> {fn_feat:?}");
+            crate::log_debug_ct!("fn_feat: {name} {ty:?} -> {fn_feat:?}");
 
             if fn_feat.min_pos() < 1 || !fn_feat.next_arg_is_content {
                 continue;
             }
-            log::debug!("checked ufcs: {ty:?}");
+            crate::log_debug_ct!("checked ufcs: {ty:?}");
             if self.ctx.analysis.completion_feat.ufcs() && fn_feat.min_pos() == 1 {
                 let before = TextEdit {
                     range: self.ctx.to_lsp_range(rng.start..rng.start, &src),
@@ -402,11 +406,7 @@ impl<'a> CompletionContext<'a> {
     /// Add completions for definitions that are available at the cursor.
     ///
     /// Filters the global/math scope with the given filter.
-    pub fn scope_completions_(
-        &mut self,
-        parens: bool,
-        filter: impl Fn(&Ty, &CompletionKindChecker) -> bool,
-    ) {
+    pub fn scope_completions(&mut self, parens: bool) {
         let Some((_, defines)) = self.defines() else {
             return;
         };
@@ -414,14 +414,15 @@ impl<'a> CompletionContext<'a> {
         let defines = defines.defines;
 
         let surrounding_syntax = self.surrounding_syntax();
+        let mode = interpret_mode_at(Some(&self.leaf));
 
         let mut kind_checker = CompletionKindChecker {
             symbols: HashSet::default(),
             functions: HashSet::default(),
         };
 
-        let filter = |ty: &Ty, c: &CompletionKindChecker| {
-            let s = match surrounding_syntax {
+        let filter = |c: &CompletionKindChecker| {
+            match surrounding_syntax {
                 SurroundingSyntax::Regular => true,
                 SurroundingSyntax::Selector => 'selector: {
                     for func in &c.functions {
@@ -432,6 +433,7 @@ impl<'a> CompletionContext<'a> {
 
                     false
                 }
+                SurroundingSyntax::ShowTransform => !c.functions.is_empty(),
                 SurroundingSyntax::SetRule => 'set_rule: {
                     // todo: user defined elements
                     for func in &c.functions {
@@ -444,8 +446,7 @@ impl<'a> CompletionContext<'a> {
 
                     false
                 }
-            };
-            s && filter(ty, c)
+            }
         };
 
         // we don't check literal type here for faster completion
@@ -455,7 +456,7 @@ impl<'a> CompletionContext<'a> {
             }
 
             kind_checker.check(&ty);
-            if !filter(&ty, &kind_checker) {
+            if !filter(&kind_checker) {
                 continue;
             }
 
@@ -474,24 +475,22 @@ impl<'a> CompletionContext<'a> {
 
             let label_detail = ty.describe().map(From::from).or_else(|| Some("any".into()));
 
-            log::debug!("scope completions!: {name} {ty:?} {label_detail:?}");
+            crate::log_debug_ct!("scope completions!: {name} {ty:?} {label_detail:?}");
             let detail = label_detail.clone();
 
             if !kind_checker.functions.is_empty() {
                 let base = Completion {
                     kind: CompletionKind::Func,
                     label_detail,
-                    command: self
-                        .trigger_parameter_hints
-                        .then_some("editor.action.triggerParameterHints"),
+                    command: self.ctx.analysis.trigger_on_snippet_with_param_hint(true),
                     ..Default::default()
                 };
 
                 let fn_feat = FnCompletionFeat::default().check(kind_checker.functions.iter());
 
-                log::debug!("fn_feat: {name} {ty:?} -> {fn_feat:?}");
+                crate::log_debug_ct!("fn_feat: {name} {ty:?} -> {fn_feat:?}");
 
-                if matches!(surrounding_syntax, SurroundingSyntax::Regular)
+                if matches!(surrounding_syntax, SurroundingSyntax::ShowTransform)
                     && (fn_feat.min_pos() > 0 || fn_feat.min_named() > 0)
                 {
                     self.completions.push(Completion {
@@ -500,7 +499,7 @@ impl<'a> CompletionContext<'a> {
                         ..base.clone()
                     });
                 }
-                if fn_feat.is_element && !matches!(surrounding_syntax, SurroundingSyntax::SetRule) {
+                if fn_feat.is_element && matches!(surrounding_syntax, SurroundingSyntax::Selector) {
                     self.completions.push(Completion {
                         label: eco_format!("{}.where", name),
                         apply: Some(eco_format!("{}.where(${{}})", name)),
@@ -513,7 +512,7 @@ impl<'a> CompletionContext<'a> {
                     SurroundingSyntax::Selector | SurroundingSyntax::SetRule
                 ) && !fn_feat.is_element;
                 if !bad_instantiate {
-                    if !parens {
+                    if !parens || matches!(surrounding_syntax, SurroundingSyntax::Selector) {
                         self.completions.push(Completion {
                             label: name,
                             ..base
@@ -525,16 +524,24 @@ impl<'a> CompletionContext<'a> {
                             ..base
                         });
                     } else {
-                        let apply = if fn_feat.next_arg_is_content && !fn_feat.has_rest {
-                            eco_format!("{name}[${{}}]")
-                        } else {
-                            eco_format!("{name}(${{}})")
-                        };
+                        let accept_content_arg = fn_feat.next_arg_is_content && !fn_feat.has_rest;
+                        let scope_reject_content = matches!(mode, InterpretMode::Math)
+                            || matches!(
+                                surrounding_syntax,
+                                SurroundingSyntax::Selector | SurroundingSyntax::SetRule
+                            );
                         self.completions.push(Completion {
-                            apply: Some(apply),
-                            label: name,
-                            ..base
+                            apply: Some(eco_format!("{name}(${{}})")),
+                            label: name.clone(),
+                            ..base.clone()
                         });
+                        if !scope_reject_content && accept_content_arg {
+                            self.completions.push(Completion {
+                                apply: Some(eco_format!("{name}[${{}}]")),
+                                label: eco_format!("{name}.bracket"),
+                                ..base
+                            });
+                        };
                     }
                 }
                 continue;
@@ -552,10 +559,11 @@ impl<'a> CompletionContext<'a> {
     }
 }
 
-#[derive(Debug)]
-enum SurroundingSyntax {
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum SurroundingSyntax {
     Regular,
     Selector,
+    ShowTransform,
     SetRule,
 }
 
@@ -563,7 +571,7 @@ fn check_surrounding_syntax(mut leaf: &LinkedNode) -> Option<SurroundingSyntax> 
     use SurroundingSyntax::*;
     let mut met_args = false;
     while let Some(parent) = leaf.parent() {
-        log::debug!(
+        crate::log_debug_ct!(
             "check_surrounding_syntax: {:?}::{:?}",
             parent.kind(),
             leaf.kind()
@@ -587,18 +595,22 @@ fn check_surrounding_syntax(mut leaf: &LinkedNode) -> Option<SurroundingSyntax> 
                 }
             }
             SyntaxKind::ShowRule => {
+                if met_args {
+                    return Some(Regular);
+                }
+
                 let rule = parent.get().cast::<ast::ShowRule>()?;
                 let colon = rule
                     .to_untyped()
                     .children()
                     .find(|s| s.kind() == SyntaxKind::Colon);
-                if colon.is_none() {
+                let Some(colon) = colon.and_then(|colon| parent.find(colon.span())) else {
                     // incomplete show rule
                     return Some(Selector);
-                }
+                };
 
-                if encolsed_by(parent, Some(rule.transform().span()), leaf) {
-                    return Some(Regular);
+                if leaf.offset() >= colon.offset() {
+                    return Some(ShowTransform);
                 } else {
                     return Some(Selector); // query's first argument
                 }
@@ -679,14 +691,14 @@ fn analyze_import_source(ctx: &LocalContext, types: &TypeScheme, s: ast::Expr) -
 #[bind(0)]
 struct ScopeChecker<'a>(&'a mut Defines, &'a mut LocalContext);
 
-impl<'a> IfaceChecker for ScopeChecker<'a> {
+impl IfaceChecker for ScopeChecker<'_> {
     fn check(
         &mut self,
-        sig: Iface,
-        _args: &mut crate::ty::IfaceCheckContext,
+        iface: Iface,
+        _ctx: &mut crate::ty::IfaceCheckContext,
         _pol: bool,
     ) -> Option<()> {
-        match sig {
+        match iface {
             // dict is not importable
             Iface::Dict(..) | Iface::Value { .. } => {}
             Iface::Element { val, .. } => {
@@ -931,67 +943,6 @@ fn encolsed_by(parent: &LinkedNode, s: Option<Span>, leaf: &LinkedNode) -> bool 
     s.and_then(|s| parent.find(s)?.find(leaf.span())).is_some()
 }
 
-fn sort_and_explicit_code_completion(ctx: &mut CompletionContext) {
-    let mut completions = std::mem::take(&mut ctx.completions);
-    let explict = ctx.explicit;
-    ctx.explicit = true;
-    let ty = Some(Ty::from_types(ctx.seen_types.iter().cloned()));
-    let from_ty = std::mem::replace(&mut ctx.from_ty, ty);
-    complete_code(ctx, true);
-    ctx.from_ty = from_ty;
-    ctx.explicit = explict;
-
-    // ctx.strict_scope_completions(false, |value| value.ty() == *ty);
-    // let length_ty = Type::of::<Length>();
-    // ctx.strict_scope_completions(false, |value| value.ty() == length_ty);
-    // let color_ty = Type::of::<Color>();
-    // ctx.strict_scope_completions(false, |value| value.ty() == color_ty);
-    // let ty = Type::of::<Dir>();
-    // ctx.strict_scope_completions(false, |value| value.ty() == ty);
-
-    log::debug!(
-        "sort_and_explicit_code_completion: {completions:#?} {:#?}",
-        ctx.completions
-    );
-
-    completions.sort_by(|a, b| {
-        a.sort_text
-            .as_ref()
-            .cmp(&b.sort_text.as_ref())
-            .then_with(|| a.label.cmp(&b.label))
-    });
-    ctx.completions.sort_by(|a, b| {
-        a.sort_text
-            .as_ref()
-            .cmp(&b.sort_text.as_ref())
-            .then_with(|| a.label.cmp(&b.label))
-    });
-
-    // todo: this is a bit messy, we can refactor for improving maintainability
-    // The messy code will finally gone, but to help us go over the mess stage, I
-    // drop some comment here.
-    //
-    // currently, there are only path completions in ctx.completions2
-    // and type/named param/positional param completions in completions
-    // and all rest less relevant completions inctx.completions
-    for (i, compl) in ctx.completions2.iter_mut().enumerate() {
-        compl.sort_text = Some(format!("{i:03}"));
-    }
-    let sort_base = ctx.completions2.len();
-    for (i, compl) in (completions.iter_mut().chain(ctx.completions.iter_mut())).enumerate() {
-        compl.sort_text = Some(eco_format!("{i:03}", i = i + sort_base));
-    }
-
-    log::debug!(
-        "sort_and_explicit_code_completion after: {completions:#?} {:#?}",
-        ctx.completions
-    );
-
-    ctx.completions.append(&mut completions);
-
-    log::debug!("sort_and_explicit_code_completion: {:?}", ctx.completions);
-}
-
 pub fn ty_to_completion_kind(ty: &Ty) -> CompletionKind {
     match ty {
         Ty::Value(ty) => value_to_completion_kind(&ty.val),
@@ -1110,7 +1061,7 @@ fn type_completion(
         return Some(());
     }
 
-    log::debug!("type_completion: {infer_type:?}");
+    crate::log_debug_ct!("type_completion: {infer_type:?}");
 
     match infer_type {
         Ty::Any => return None,
@@ -1154,9 +1105,7 @@ fn type_completion(
                 apply: Some(eco_format!("{}: ${{}}", f)),
                 label_detail: p.ty.describe(),
                 detail: docs.map(Into::into),
-                command: ctx
-                    .trigger_named_completion
-                    .then_some("tinymist.triggerNamedCompletion"),
+                command: ctx.ctx.analysis.trigger_on_snippet_with_param_hint(true),
                 ..Completion::default()
             });
         }
@@ -1380,7 +1329,7 @@ pub(crate) fn complete_type(ctx: &mut CompletionContext) -> Option<()> {
     use crate::syntax::get_check_target;
 
     let check_target = get_check_target(ctx.leaf.clone());
-    log::debug!("complete_type: pos {:?} -> {check_target:#?}", ctx.leaf);
+    crate::log_debug_ct!("complete_type: pos {:?} -> {check_target:#?}", ctx.leaf);
     let mut args_node = None;
 
     match check_target {
@@ -1408,53 +1357,50 @@ pub(crate) fn complete_type(ctx: &mut CompletionContext) -> Option<()> {
         {
             args_node = e.parent().map(|s| s.get().clone());
         }
-        Some(CheckTarget::Normal(e))
-            if matches!(
-                e.kind(),
-                SyntaxKind::Ident | SyntaxKind::Label | SyntaxKind::Ref | SyntaxKind::Str
-            ) => {}
-        Some(CheckTarget::Paren { .. }) => {}
-        Some(CheckTarget::Normal(..)) => return None,
-        None => return None,
+        // todo: complete type field
+        Some(CheckTarget::Normal(e)) if matches!(e.kind(), SyntaxKind::FieldAccess) => {
+            return None;
+        }
+        Some(CheckTarget::Paren { .. } | CheckTarget::Normal(..)) | None => {}
     }
 
-    log::debug!("ctx.leaf {:?}", ctx.leaf.clone());
+    crate::log_debug_ct!("ctx.leaf {:?}", ctx.leaf.clone());
 
     let ty = ctx
         .ctx
         .literal_type_of_node(ctx.leaf.clone())
-        .filter(|ty| !matches!(ty, Ty::Any))?;
+        .filter(|ty| !matches!(ty, Ty::Any));
+
+    let scope = ctx.surrounding_syntax();
+
+    crate::log_debug_ct!("complete_type: {:?} -> ({scope:?}, {ty:#?})", ctx.leaf);
+    if matches!((scope, &ty), (SurroundingSyntax::Regular, None)) {
+        return None;
+    }
 
     // adjust the completion position
     if is_ident_like(&ctx.leaf) {
         ctx.from = ctx.leaf.offset();
     }
 
-    log::debug!("complete_type: ty  {:?} -> {ty:#?}", ctx.leaf);
+    if let Some(ty) = ty {
+        type_completion(ctx, &ty, None);
+    }
 
-    type_completion(ctx, &ty, None);
     if ctx.before.ends_with(',') || ctx.before.ends_with(':') {
         ctx.enrich(" ", "");
     }
 
-    if let Some(c) = args_node {
-        log::debug!("content block compl: args {c:?}");
-        let is_unclosed = matches!(c.kind(), SyntaxKind::Args)
-            && c.children().fold(0i32, |acc, node| match node.kind() {
-                SyntaxKind::LeftParen => acc + 1,
-                SyntaxKind::RightParen => acc - 1,
-                SyntaxKind::Error if node.text() == "(" => acc + 1,
-                SyntaxKind::Error if node.text() == ")" => acc - 1,
-                _ => acc,
-            }) > 0;
-        if is_unclosed {
-            ctx.enrich("", ")");
-        }
-    }
+    let mut completions = std::mem::take(&mut ctx.completions);
+    let explict = ctx.explicit;
+    ctx.explicit = true;
+    let ty = Some(Ty::from_types(ctx.seen_types.iter().cloned()));
+    let from_ty = std::mem::replace(&mut ctx.from_ty, ty);
+    complete_code(ctx, true);
+    ctx.from_ty = from_ty;
+    ctx.explicit = explict;
 
-    let surrounding_syntax = ctx.surrounding_syntax();
-
-    match surrounding_syntax {
+    match scope {
         SurroundingSyntax::Regular => {}
         SurroundingSyntax::Selector => {
             ctx.snippet_completion(
@@ -1469,18 +1415,101 @@ pub(crate) fn complete_type(ctx: &mut CompletionContext) -> Option<()> {
                 "Replace matches of a regular expression.",
             );
         }
+        SurroundingSyntax::ShowTransform => {
+            ctx.snippet_completion(
+                "replacement",
+                "[${content}]",
+                "Replace the selected element with content.",
+            );
+
+            ctx.snippet_completion(
+                "replacement (string)",
+                "\"${text}\"",
+                "Replace the selected element with a string of text.",
+            );
+
+            ctx.snippet_completion(
+                "transformation",
+                "element => [${content}]",
+                "Transform the element with a function.",
+            );
+        }
         SurroundingSyntax::SetRule => {}
     }
 
-    sort_and_explicit_code_completion(ctx);
+    // ctx.strict_scope_completions(false, |value| value.ty() == *ty);
+    // let length_ty = Type::of::<Length>();
+    // ctx.strict_scope_completions(false, |value| value.ty() == length_ty);
+    // let color_ty = Type::of::<Color>();
+    // ctx.strict_scope_completions(false, |value| value.ty() == color_ty);
+    // let ty = Type::of::<Dir>();
+    // ctx.strict_scope_completions(false, |value| value.ty() == ty);
 
-    match surrounding_syntax {
+    crate::log_debug_ct!(
+        "sort_and_explicit_code_completion: {completions:#?} {:#?}",
+        ctx.completions
+    );
+
+    completions.sort_by(|a, b| {
+        a.sort_text
+            .as_ref()
+            .cmp(&b.sort_text.as_ref())
+            .then_with(|| a.label.cmp(&b.label))
+    });
+    ctx.completions.sort_by(|a, b| {
+        a.sort_text
+            .as_ref()
+            .cmp(&b.sort_text.as_ref())
+            .then_with(|| a.label.cmp(&b.label))
+    });
+
+    // todo: this is a bit messy, we can refactor for improving maintainability
+    // The messy code will finally gone, but to help us go over the mess stage, I
+    // drop some comment here.
+    //
+    // currently, there are only path completions in ctx.completions2
+    // and type/named param/positional param completions in completions
+    // and all rest less relevant completions inctx.completions
+    for (i, compl) in ctx.completions2.iter_mut().enumerate() {
+        compl.sort_text = Some(format!("{i:03}"));
+    }
+    let sort_base = ctx.completions2.len();
+    for (i, compl) in (completions.iter_mut().chain(ctx.completions.iter_mut())).enumerate() {
+        compl.sort_text = Some(eco_format!("{i:03}", i = i + sort_base));
+    }
+
+    crate::log_debug_ct!(
+        "sort_and_explicit_code_completion after: {completions:#?} {:#?}",
+        ctx.completions
+    );
+
+    ctx.completions.append(&mut completions);
+
+    if let Some(c) = args_node {
+        crate::log_debug_ct!("content block compl: args {c:?}");
+        let is_unclosed = matches!(c.kind(), SyntaxKind::Args)
+            && c.children().fold(0i32, |acc, node| match node.kind() {
+                SyntaxKind::LeftParen => acc + 1,
+                SyntaxKind::RightParen => acc - 1,
+                SyntaxKind::Error if node.text() == "(" => acc + 1,
+                SyntaxKind::Error if node.text() == ")" => acc - 1,
+                _ => acc,
+            }) > 0;
+        if is_unclosed {
+            ctx.enrich("", ")");
+        }
+    }
+
+    match scope {
         SurroundingSyntax::Regular => {}
         SurroundingSyntax::Selector => {
             ctx.enrich("", ": ${}");
         }
+        SurroundingSyntax::ShowTransform => {}
         SurroundingSyntax::SetRule => {}
     }
+
+    crate::log_debug_ct!("sort_and_explicit_code_completion: {:?}", ctx.completions);
 
     Some(())
 }
@@ -1507,7 +1536,7 @@ pub fn complete_path(
 
         let vr = v.range();
         rng = vr.start + 1..vr.end - 1;
-        log::debug!("path_of: {rng:?} {cursor}");
+        crate::log_debug_ct!("path_of: {rng:?} {cursor}");
         if rng.start > rng.end || (cursor != rng.end && !rng.contains(&cursor)) {
             return None;
         }
@@ -1517,7 +1546,7 @@ pub fn complete_path(
         w.push_str(&source.text()[rng.start..cursor]);
         w.push('"');
         let partial_str = SyntaxNode::leaf(SyntaxKind::Str, w);
-        log::debug!("path_of: {rng:?} {partial_str:?}");
+        crate::log_debug_ct!("path_of: {rng:?} {partial_str:?}");
 
         text = partial_str.cast::<ast::Str>()?.get();
         is_in_text = true;
@@ -1526,7 +1555,7 @@ pub fn complete_path(
         rng = cursor..cursor;
         is_in_text = false;
     }
-    log::debug!("complete_path: is_in_text: {is_in_text:?}");
+    crate::log_debug_ct!("complete_path: is_in_text: {is_in_text:?}");
     let path = Path::new(text.as_str());
     let has_root = path.has_root();
 
@@ -1537,7 +1566,7 @@ pub fn complete_path(
     if !compl_path.is_dir() {
         compl_path = compl_path.parent().unwrap_or(Path::new(""));
     }
-    log::debug!("compl_path: {src_path:?} + {path:?} -> {compl_path:?}");
+    crate::log_debug_ct!("compl_path: {src_path:?} + {path:?} -> {compl_path:?}");
 
     if compl_path.is_absolute() {
         log::warn!("absolute path completion is not supported for security consideration {path:?}");
@@ -1549,7 +1578,7 @@ pub fn complete_path(
     let mut module_completions = vec![];
     // todo: test it correctly
     for path in ctx.completion_files(p) {
-        log::debug!("compl_check_path: {path:?}");
+        crate::log_debug_ct!("compl_check_path: {path:?}");
 
         // Skip self smartly
         if *path == base {
@@ -1560,12 +1589,16 @@ pub fn complete_path(
             // diff with root
             unix_slash(path.vpath().as_rooted_path())
         } else {
-            let base = base.vpath().as_rooted_path();
+            let base = base
+                .vpath()
+                .as_rooted_path()
+                .parent()
+                .unwrap_or(Path::new("/"));
             let path = path.vpath().as_rooted_path();
             let w = pathdiff::diff_paths(path, base)?;
             unix_slash(&w)
         };
-        log::debug!("compl_label: {label:?}");
+        crate::log_debug_ct!("compl_label: {label:?}");
 
         module_completions.push((label, CompletionKind::File));
 
@@ -1627,7 +1660,7 @@ pub fn complete_path(
                     ..Default::default()
                 };
 
-                log::debug!("compl_res: {res:?}");
+                crate::log_debug_ct!("compl_res: {res:?}");
 
                 res
             })
@@ -1683,10 +1716,28 @@ static DEFAULT_POSTFIX_SNIPPET: LazyLock<Vec<PostfixSnippet>> = LazyLock::new(||
         PostfixSnippet {
             scope: PostfixSnippetScope::Content,
             mode: eco_vec![InterpretMode::Code, InterpretMode::Markup],
-            label: "aleft".into(),
-            label_detail: Some(".align left".into()),
-            snippet: "align(left, ${node})".into(),
-            description: "wrap as with align left".into(),
+            label: eco_format!("text fill"),
+            label_detail: Some(eco_format!(".text fill")),
+            snippet: "text(fill: ${}, ${node})".into(),
+            description: eco_format!("wrap with text fill"),
+            parsed_snippet: OnceLock::new(),
+        },
+        PostfixSnippet {
+            scope: PostfixSnippetScope::Content,
+            mode: eco_vec![InterpretMode::Code, InterpretMode::Markup],
+            label: eco_format!("text size"),
+            label_detail: Some(eco_format!(".text size")),
+            snippet: "text(size: ${}, ${node})".into(),
+            description: eco_format!("wrap with text size"),
+            parsed_snippet: OnceLock::new(),
+        },
+        PostfixSnippet {
+            scope: PostfixSnippetScope::Content,
+            mode: eco_vec![InterpretMode::Code, InterpretMode::Markup],
+            label: eco_format!("align"),
+            label_detail: Some(eco_format!(".align")),
+            snippet: "align(${}, ${node})".into(),
+            description: eco_format!("wrap with alignment"),
             parsed_snippet: OnceLock::new(),
         },
         PostfixSnippet {
@@ -1701,10 +1752,46 @@ static DEFAULT_POSTFIX_SNIPPET: LazyLock<Vec<PostfixSnippet>> = LazyLock::new(||
         PostfixSnippet {
             scope: PostfixSnippetScope::Value,
             mode: eco_vec![InterpretMode::Code, InterpretMode::Markup],
+            label: "else".into(),
+            label_detail: Some(".else".into()),
+            snippet: "if not ${node} { ${} }".into(),
+            description: "wrap as if not expression".into(),
+            parsed_snippet: OnceLock::new(),
+        },
+        PostfixSnippet {
+            scope: PostfixSnippetScope::Value,
+            mode: eco_vec![InterpretMode::Code, InterpretMode::Markup],
+            label: "none".into(),
+            label_detail: Some(".if none".into()),
+            snippet: "if ${node} == none { ${} }".into(),
+            description: "wrap as if expression to check none-ish".into(),
+            parsed_snippet: OnceLock::new(),
+        },
+        PostfixSnippet {
+            scope: PostfixSnippetScope::Value,
+            mode: eco_vec![InterpretMode::Code, InterpretMode::Markup],
+            label: "notnone".into(),
+            label_detail: Some(".if not none".into()),
+            snippet: "if ${node} != none { ${} }".into(),
+            description: "wrap as if expression to check none-ish".into(),
+            parsed_snippet: OnceLock::new(),
+        },
+        PostfixSnippet {
+            scope: PostfixSnippetScope::Value,
+            mode: eco_vec![InterpretMode::Code, InterpretMode::Markup],
             label: "return".into(),
             label_detail: Some(".return".into()),
             snippet: "return ${node}".into(),
             description: "wrap as return expression".into(),
+            parsed_snippet: OnceLock::new(),
+        },
+        PostfixSnippet {
+            scope: PostfixSnippetScope::Value,
+            mode: eco_vec![InterpretMode::Code, InterpretMode::Markup],
+            label: "tup".into(),
+            label_detail: Some(".tup".into()),
+            snippet: "(${node}, ${})".into(),
+            description: "wrap as tuple (array) expression".into(),
             parsed_snippet: OnceLock::new(),
         },
         PostfixSnippet {
@@ -1720,7 +1807,6 @@ static DEFAULT_POSTFIX_SNIPPET: LazyLock<Vec<PostfixSnippet>> = LazyLock::new(||
 });
 
 #[cfg(test)]
-
 mod tests {
     use crate::upstream::complete::slice_at;
 

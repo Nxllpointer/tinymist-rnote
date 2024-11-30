@@ -6,11 +6,10 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tinymist_derive::BindTyCtx;
 
 use super::{
-    prelude::*, BuiltinTy, FlowVarKind, SharedContext, TyCtxMut, TypeBounds, TypeScheme, TypeVar,
-    TypeVarBounds,
+    prelude::*, BuiltinTy, DynTypeBounds, FlowVarKind, SharedContext, TyCtxMut, TypeScheme,
+    TypeVar, TypeVarBounds,
 };
 use crate::{
-    log_never,
     syntax::{Decl, DeclExpr, Expr, ExprInfo, UnaryOp},
     ty::*,
 };
@@ -70,7 +69,7 @@ pub(crate) fn type_check(
     checker.info.exports = exports;
 
     let elapsed = type_check_start.elapsed();
-    log::debug!("Type checking on {:?} took {elapsed:?}", checker.ei.fid);
+    crate::log_debug_ct!("Type checking on {:?} took {elapsed:?}", checker.ei.fid);
 
     checker.env.visiting.remove(&checker.ei.fid);
 
@@ -95,8 +94,8 @@ pub(crate) struct TypeChecker<'a> {
     env: &'a mut TypeEnv,
 }
 
-impl<'a> TyCtx for TypeChecker<'a> {
-    fn global_bounds(&self, var: &Interned<TypeVar>, pol: bool) -> Option<TypeBounds> {
+impl TyCtx for TypeChecker<'_> {
+    fn global_bounds(&self, var: &Interned<TypeVar>, pol: bool) -> Option<DynTypeBounds> {
         self.info.global_bounds(var, pol)
     }
 
@@ -105,7 +104,7 @@ impl<'a> TyCtx for TypeChecker<'a> {
     }
 }
 
-impl<'a> TyCtxMut for TypeChecker<'a> {
+impl TyCtxMut for TypeChecker<'_> {
     type Snap = <TypeScheme as TyCtxMut>::Snap;
 
     fn start_scope(&mut self) -> Self::Snap {
@@ -147,7 +146,7 @@ impl<'a> TyCtxMut for TypeChecker<'a> {
     }
 }
 
-impl<'a> TypeChecker<'a> {
+impl TypeChecker<'_> {
     fn check(&mut self, root: &Expr) -> Ty {
         self.check_syntax(root).unwrap_or(Ty::undef())
     }
@@ -161,7 +160,7 @@ impl<'a> TypeChecker<'a> {
         let mut gen_var = var.as_ref().clone();
         let encoded = Interned::new(Decl::docs(base.clone(), var.clone()));
         gen_var.def = encoded.clone();
-        log::debug!("copy var {fr:?} as {encoded:?}");
+        crate::log_debug_ct!("copy var {fr:?} as {encoded:?}");
         let bounds = TypeVarBounds::new(gen_var, fr.bounds.bounds().read().clone());
         let var = bounds.as_type();
         self.info.vars.insert(encoded, bounds);
@@ -169,7 +168,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn get_var(&mut self, decl: &DeclExpr) -> Interned<TypeVar> {
-        log::debug!("get_var {decl:?}");
+        crate::log_debug_ct!("get_var {decl:?}");
         let entry = self.info.vars.entry(decl.clone()).or_insert_with(|| {
             let name = decl.name().clone();
             let decl = decl.clone();
@@ -180,7 +179,7 @@ impl<'a> TypeChecker<'a> {
                     return None;
                 }
 
-                log::debug!("import_ty {name} from {fid:?}");
+                crate::log_debug_ct!("import_ty {name} from {fid:?}");
 
                 let ext_def_use_info = self.ctx.expr_stage_by_id(fid)?;
                 let source = &ext_def_use_info.source;
@@ -279,25 +278,25 @@ impl<'a> TypeChecker<'a> {
                 let _ = w.def;
             }
             (Ty::Var(v), rhs) => {
-                log_never!("constrain var {v:?} ⪯ {rhs:?}");
+                crate::log_debug_ct!("constrain var {v:?} ⪯ {rhs:?}");
                 let w = self.info.vars.get_mut(&v.def).unwrap();
                 // strict constraint on upper bound
                 let bound = rhs.clone();
                 match &w.bounds {
                     FlowVarKind::Strong(w) | FlowVarKind::Weak(w) => {
                         let mut w = w.write();
-                        w.ubs.push(bound);
+                        w.ubs.insert_mut(bound);
                     }
                 }
             }
             (lhs, Ty::Var(v)) => {
                 let w = self.info.vars.get(&v.def).unwrap();
                 let bound = self.weaken_constraint(lhs, &w.bounds);
-                log_never!("constrain var {v:?} ⪰ {bound:?}");
+                crate::log_debug_ct!("constrain var {v:?} ⪰ {bound:?}");
                 match &w.bounds {
                     FlowVarKind::Strong(v) | FlowVarKind::Weak(v) => {
                         let mut v = v.write();
-                        v.lbs.push(bound);
+                        v.lbs.insert_mut(bound);
                     }
                 }
             }
@@ -365,7 +364,7 @@ impl<'a> TypeChecker<'a> {
             }
             (Ty::Dict(lhs), Ty::Dict(rhs)) => {
                 for (key, lhs, rhs) in lhs.common_iface_fields(rhs) {
-                    log_never!("constrain record item {key} {lhs:?} ⪯ {rhs:?}");
+                    crate::log_debug_ct!("constrain record item {key} {lhs:?} ⪯ {rhs:?}");
                     self.constrain(lhs, rhs);
                     // if !sl.is_detached() {
                     //     self.info.witness_at_most(*sl, rhs.clone());
@@ -381,32 +380,32 @@ impl<'a> TypeChecker<'a> {
                 self.constrain(&lhs.lhs, &rhs.lhs);
             }
             (Ty::Unary(lhs), rhs) if lhs.op == UnaryOp::TypeOf && is_ty(rhs) => {
-                log_never!("constrain type of {lhs:?} ⪯ {rhs:?}");
+                crate::log_debug_ct!("constrain type of {lhs:?} ⪯ {rhs:?}");
 
                 self.constrain(&lhs.lhs, rhs);
             }
             (lhs, Ty::Unary(rhs)) if rhs.op == UnaryOp::TypeOf && is_ty(lhs) => {
-                log_never!(
+                crate::log_debug_ct!(
                     "constrain type of {lhs:?} ⪯ {rhs:?} {:?}",
-                    matches!(lhs, Ty::Builtin(..))
+                    matches!(lhs, Ty::Builtin(..)),
                 );
                 self.constrain(lhs, &rhs.lhs);
             }
             (Ty::Value(lhs), rhs) => {
-                log_never!("constrain value {lhs:?} ⪯ {rhs:?}");
+                crate::log_debug_ct!("constrain value {lhs:?} ⪯ {rhs:?}");
                 let _ = TypeScheme::witness_at_most;
                 // if !lhs.1.is_detached() {
                 //     self.info.witness_at_most(lhs.1, rhs.clone());
                 // }
             }
             (lhs, Ty::Value(rhs)) => {
-                log_never!("constrain value {lhs:?} ⪯ {rhs:?}");
+                crate::log_debug_ct!("constrain value {lhs:?} ⪯ {rhs:?}");
                 // if !rhs.1.is_detached() {
                 //     self.info.witness_at_least(rhs.1, lhs.clone());
                 // }
             }
             _ => {
-                log_never!("constrain {lhs:?} ⪯ {rhs:?}");
+                crate::log_debug_ct!("constrain {lhs:?} ⪯ {rhs:?}");
             }
         }
     }
@@ -531,7 +530,7 @@ struct Joiner {
 }
 impl Joiner {
     fn finalize(self) -> Ty {
-        log::debug!("join: {:?} {:?}", self.possibles, self.definite);
+        crate::log_debug_ct!("join: {:?} {:?}", self.possibles, self.definite);
         if self.possibles.is_empty() {
             return self.definite;
         }
@@ -544,7 +543,7 @@ impl Joiner {
         //     definite = definite.join(p);
         // }
 
-        // log::debug!("possibles: {:?} {:?}", self.definite, self.possibles);
+        // crate::log_debug_ct!("possibles: {:?} {:?}", self.definite, self.possibles);
 
         Ty::Any
     }

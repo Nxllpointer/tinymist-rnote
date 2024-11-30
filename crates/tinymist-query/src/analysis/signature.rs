@@ -11,8 +11,8 @@ use super::{
 use crate::analysis::PostTypeChecker;
 use crate::docs::{UntypedDefDocs, UntypedSignatureDocs, UntypedVarDocs};
 use crate::syntax::get_non_strict_def_target;
+use crate::ty::{DynTypeBounds, ParamAttrs};
 use crate::ty::{InsTy, TyCtx};
-use crate::ty::{ParamAttrs, TypeBounds};
 use crate::upstream::truncated_repr;
 
 /// Describes a function signature.
@@ -179,7 +179,7 @@ pub(crate) fn analyze_signature(
     callee_node: SignatureTarget,
 ) -> Option<Signature> {
     ctx.compute_signature(callee_node.clone(), move |ctx| {
-        log::debug!("analyzing signature for {callee_node:?}");
+        crate::log_debug_ct!("analyzing signature for {callee_node:?}");
         analyze_type_signature(ctx, &callee_node)
             .or_else(|| analyze_dyn_signature(ctx, &callee_node))
     })
@@ -223,7 +223,7 @@ pub(crate) fn sig_of_type(
     // todo multiple sources
     let mut srcs = ty.sources();
     srcs.sort();
-    log::debug!("check type signature of ty: {ty:?} => {srcs:?}");
+    crate::log_debug_ct!("check type signature of ty: {ty:?} => {srcs:?}");
     let type_var = srcs.into_iter().next()?;
     match type_var {
         DocSource::Var(v) => {
@@ -382,9 +382,9 @@ struct AliasStackChecker<'a, 'b> {
     checking_with: bool,
 }
 
-impl<'a, 'b> BoundChecker for AliasStackChecker<'a, 'b> {
+impl BoundChecker for AliasStackChecker<'_, '_> {
     fn check_var(&mut self, u: &Interned<TypeVar>, pol: bool) {
-        log::debug!("collecting var {u:?} {pol:?}");
+        crate::log_debug_ct!("collecting var {u:?} {pol:?}");
         if self.res.is_some() {
             return;
         }
@@ -396,7 +396,7 @@ impl<'a, 'b> BoundChecker for AliasStackChecker<'a, 'b> {
 
         let docs = self.ctx.info.var_docs.get(&u.def).map(|x| x.as_ref());
 
-        log::debug!("collecting var {u:?} {pol:?} => {docs:?}");
+        crate::log_debug_ct!("collecting var {u:?} {pol:?} => {docs:?}");
         // todo: bind builtin functions
         match docs {
             Some(UntypedDefDocs::Function(sig)) => {
@@ -420,7 +420,7 @@ impl<'a, 'b> BoundChecker for AliasStackChecker<'a, 'b> {
 
         match (self.checking_with, ty) {
             (true, Ty::With(w)) => {
-                log::debug!("collecting with {ty:?} {pol:?}");
+                crate::log_debug_ct!("collecting with {ty:?} {pol:?}");
                 self.stack.last_mut().unwrap().1 = Some(w.clone());
                 self.checking_with = false;
                 w.sig.bounds(pol, self);
@@ -619,7 +619,7 @@ fn analyze_closure_signature(
 
 struct PatternDisplay<'a>(&'a ast::Pattern<'a>);
 
-impl<'a> fmt::Display for PatternDisplay<'a> {
+impl fmt::Display for PatternDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {
             ast::Pattern::Normal(ast::Expr::Ident(ident)) => f.write_str(ident.as_str()),

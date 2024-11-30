@@ -10,19 +10,20 @@ use typst_syntax::Source;
 use super::*;
 
 fn conv_(s: &str, for_docs: bool) -> EcoString {
-    static FONT_RESOLVER: LazyLock<Arc<FontResolverImpl>> = LazyLock::new(|| {
-        Arc::new(
+    static FONT_RESOLVER: LazyLock<Result<Arc<FontResolverImpl>>> = LazyLock::new(|| {
+        Ok(Arc::new(
             LspUniverseBuilder::resolve_fonts(CompileFontArgs::default())
-                .expect("cannot resolve default fonts"),
-        )
+                .map_err(|e| format!("{e:?}"))?,
+        ))
     });
 
+    let font_resolver = FONT_RESOLVER.clone();
     let cwd = std::env::current_dir().unwrap();
     let main = Source::detached(s);
     let mut universe = LspUniverseBuilder::build(
         EntryState::new_rooted(cwd.as_path().into(), Some(main.id())),
+        font_resolver.unwrap(),
         Default::default(),
-        FONT_RESOLVER.clone(),
         Default::default(),
     )
     .unwrap();
@@ -58,43 +59,39 @@ fn test_converted() {
     insta::assert_snapshot!(conv(r###"
 = Hello, World!
 This is a typst document.
-        "###), @r###"
-        # Hello, World!
-        This is a typst document.
-        "###);
+        "###), @r"
+    # Hello, World!
+    This is a typst document.
+    ");
     insta::assert_snapshot!(conv(r###"
 Some inlined raw `a`, ```c b```
         "###), @"Some inlined raw `a`, `b`");
     insta::assert_snapshot!(conv(r###"
 - Some *item*
 - Another _item_
-        "###), @r###"
-        - Some **item**
-        - Another _item_
-        "###);
+        "###), @r"
+    - Some **item**
+    - Another _item_
+    ");
     insta::assert_snapshot!(conv(r###"
 + A
 + B
-        "###), @r###"
-        1. A
-        1. B
-        "###);
+        "###), @r"
+    1. A
+    1. B
+    ");
     insta::assert_snapshot!(conv(r###"
 2. A
 + B
-        "###), @r###"
-        2. A
-        1. B
-        "###);
+        "###), @r"
+    2. A
+    1. B
+    ");
     insta::assert_snapshot!(conv(r###"
 $
 1/2 + 1/3 = 5/6
 $
-        "###), @r###"
-
-    <p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="data:image-hash/svg+xml;base64,redacted"><img alt="typst-block" src="data:image-hash/svg+xml;base64,redacted" /></picture></p>
-            
-    "###);
+        "###), @r#"<p align="center"><picture><source media="(prefers-color-scheme: dark)" srcset="data:image-hash/svg+xml;base64,redacted"><img alt="typst-block" src="data:image-hash/svg+xml;base64,redacted" /></picture></p>"#);
 }
 
 #[test]
@@ -118,8 +115,7 @@ See @@show-module() for outputting the results of this function.
 - preamble (string): Code to prepend to all code snippets shown with `#example()`. 
       This can for instance be used to import something from the scope. 
 -> string
-        "###), @r###"
-
+        "###), @r"
     These again are dictionaries with the keys
     - <!-- typlite:begin:list-item 0 -->`description` (optional): The description for the argument.<!-- typlite:end:list-item 0 -->
     - <!-- typlite:begin:list-item 0 -->`types` (optional): A list of accepted argument types.<!-- typlite:end:list-item 0 --> 
@@ -138,8 +134,7 @@ See @@show-module() for outputting the results of this function.
     - <!-- typlite:begin:list-item 0 -->preamble (string): Code to prepend to all code snippets shown with `#example()`. 
           This can for instance be used to import something from the scope.<!-- typlite:end:list-item 0 --> 
     -> string
-            
-    "###);
+    ");
     insta::assert_snapshot!(conv_docs(r###"
 These again are dictionaries with the keys
 - `description` (optional): The description for the argument.
@@ -152,8 +147,7 @@ See @@show-module() for outputting the results of this function.
   - nested something
   - nested something 2
 -> string
-        "###), @r###"
-
+        "###), @r"
     These again are dictionaries with the keys
     - <!-- typlite:begin:list-item 0 -->`description` (optional): The description for the argument.<!-- typlite:end:list-item 0 -->
 
@@ -165,6 +159,5 @@ See @@show-module() for outputting the results of this function.
       - <!-- typlite:begin:list-item 1 -->nested something<!-- typlite:end:list-item 1 -->
       - <!-- typlite:begin:list-item 1 -->nested something 2<!-- typlite:end:list-item 1 --><!-- typlite:end:list-item 0 -->
     -> string
-            
-    "###);
+    ");
 }

@@ -145,6 +145,36 @@ impl Analysis {
     pub fn report_alloc_stats(&self) -> String {
         AllocStats::report(self)
     }
+
+    /// Get configured trigger parameter hints command.
+    pub fn trigger_parameter_hints(&self, context: bool) -> Option<&'static str> {
+        (self.completion_feat.trigger_parameter_hints && context)
+            .then_some("editor.action.triggerParameterHints")
+    }
+
+    /// Get configured trigger after snippet command.
+    ///
+    /// > VS Code doesn't do that... Auto triggering suggestion only happens on
+    /// > typing (word starts or trigger characters). However, you can use
+    /// > editor.action.triggerSuggest as command on a suggestion to "manually"
+    /// > retrigger suggest after inserting one
+    pub fn trigger_on_snippet(&self, context: bool) -> Option<&'static str> {
+        if !self.completion_feat.trigger_on_snippet_placeholders {
+            return None;
+        }
+
+        (self.completion_feat.trigger_suggest && context).then_some("editor.action.triggerSuggest")
+    }
+
+    /// Get configured trigger on positional parameter hints command.
+    pub fn trigger_on_snippet_with_param_hint(&self, context: bool) -> Option<&'static str> {
+        if !self.completion_feat.trigger_on_snippet_placeholders {
+            return self.trigger_parameter_hints(context);
+        }
+
+        (self.completion_feat.trigger_suggest_and_parameter_hints && context)
+            .then_some("tinymist.triggerSuggestAndParameterHints")
+    }
 }
 
 /// The periscope provider.
@@ -256,11 +286,13 @@ impl DerefMut for LocalContext {
 }
 
 impl LocalContext {
+    /// Set the files for LSP-based completion.
     #[cfg(test)]
     pub fn test_completion_files(&mut self, f: impl FnOnce() -> Vec<TypstFileId>) {
         self.caches.completion_files.get_or_init(f);
     }
 
+    /// Set the files for analysis.
     #[cfg(test)]
     pub fn test_files(&mut self, f: impl FnOnce() -> Vec<TypstFileId>) {
         self.caches.root_files.get_or_init(f);
@@ -305,7 +337,7 @@ impl LocalContext {
     /// Get the module dependencies of the workspace.
     pub fn module_dependencies(&mut self) -> &HashMap<TypstFileId, ModuleDependency> {
         if self.caches.module_deps.get().is_some() {
-            return self.caches.module_deps.get().unwrap();
+            self.caches.module_deps.get().unwrap()
         } else {
             // may cause multiple times to calculate, but it is okay because we have mutable
             // reference to self.
@@ -571,7 +603,7 @@ impl SharedContext {
     }
 
     /// Get the real definition of a compilation.
-    /// Note: must be called after compliation.
+    /// Note: must be called after compilation.
     pub(crate) fn dependencies(&self) -> EcoVec<reflexo::ImmutPath> {
         let mut v = EcoVec::new();
         self.world.iter_dependencies(&mut |p| {
@@ -722,12 +754,12 @@ impl SharedContext {
     }
 
     pub(crate) fn type_of_func(self: &Arc<Self>, func: Func) -> Signature {
-        log::debug!("convert runtime func {func:?}");
+        crate::log_debug_ct!("convert runtime func {func:?}");
         analyze_signature(self, SignatureTarget::Convert(func)).unwrap()
     }
 
     pub(crate) fn type_of_value(self: &Arc<Self>, val: &Value) -> Ty {
-        log::debug!("convert runtime value {val:?}");
+        crate::log_debug_ct!("convert runtime value {val:?}");
 
         // todo: check performance on peeking signature source frequently
         let cache_key = val;
@@ -800,7 +832,7 @@ impl SharedContext {
     }
 
     pub(crate) fn sig_of_def(self: &Arc<Self>, def: Definition) -> Option<Signature> {
-        log::debug!("check definition func {def:?}");
+        crate::log_debug_ct!("check definition func {def:?}");
         let source = def.decl.file_id().and_then(|f| self.source_by_id(f).ok());
         analyze_signature(self, SignatureTarget::Def(source, def))
     }
@@ -929,19 +961,19 @@ impl SharedContext {
     /// Check on a module before really needing them. But we likely use them
     /// after a while.
     pub(crate) fn prefetch_type_check(self: &Arc<Self>, _fid: TypstFileId) {
-        // log::debug!("prefetch type check {fid:?}");
+        // crate::log_debug_ct!("prefetch type check {fid:?}");
         // let this = self.clone();
         // rayon::spawn(move || {
         //     let Some(source) = this.world.source(fid).ok() else {
         //         return;
         //     };
         //     this.type_check(&source);
-        //     // log::debug!("prefetch type check end {fid:?}");
+        //     // crate::log_debug_ct!("prefetch type check end {fid:?}");
         // });
     }
 
     pub(crate) fn preload_package(self: Arc<Self>, entry_point: TypstFileId) {
-        log::debug!("preload package start {entry_point:?}");
+        crate::log_debug_ct!("preload package start {entry_point:?}");
 
         #[derive(Clone)]
         struct Preloader {
@@ -951,7 +983,7 @@ impl SharedContext {
 
         impl Preloader {
             fn work(&self, fid: TypstFileId) {
-                log::debug!("preload package {fid:?}");
+                crate::log_debug_ct!("preload package {fid:?}");
                 let source = self.shared.source_by_id(fid).ok().unwrap();
                 let expr = self.shared.expr_stage(&source);
                 self.shared.type_check(&source);

@@ -58,7 +58,7 @@ impl<'a> DecenderItem<'a> {
 }
 
 /// Find the decender nodes starting from the given position.
-pub fn node_decenders<T>(
+pub fn node_descenders<T>(
     node: LinkedNode,
     mut recv: impl FnMut(DecenderItem) -> Option<T>,
 ) -> Option<T> {
@@ -99,7 +99,7 @@ pub fn descending_decls<T>(
     node: LinkedNode,
     mut recv: impl FnMut(DescentDecl) -> Option<T>,
 ) -> Option<T> {
-    node_decenders(node, |node| {
+    node_descenders(node, |node| {
         match (&node, node.node().cast::<ast::Expr>()?) {
             (DecenderItem::Sibling(..), ast::Expr::Let(lb)) => {
                 for ident in lb.kind().bindings() {
@@ -265,18 +265,16 @@ pub(crate) fn interpret_mode_at_kind(k: SyntaxKind) -> Option<InterpretMode> {
         CodeBlock | Code => InterpretMode::Code,
         ContentBlock | Markup => InterpretMode::Markup,
         Equation | Math => InterpretMode::Math,
-        Ident | FieldAccess | Bool | Int | Float | Numeric | Space | Linebreak | Parbreak
-        | Escape | Shorthand | SmartQuote | RawLang | RawDelim | RawTrimmed | Hash | LeftBrace
-        | RightBrace | LeftBracket | RightBracket | LeftParen | RightParen | Comma | Semicolon
-        | Colon | Star | Underscore | Dollar | Plus | Minus | Slash | Hat | Prime | Dot | Eq
-        | EqEq | ExclEq | Lt | LtEq | Gt | GtEq | PlusEq | HyphEq | StarEq | SlashEq | Dots
-        | Arrow | Root | Not | And | Or | None | Auto | As | Named | Keyed | Error | End => {
+        Label | Text | Ident | FieldAccess | Bool | Int | Float | Numeric | Space | Linebreak
+        | Parbreak | Escape | Shorthand | SmartQuote | RawLang | RawDelim | RawTrimmed | Hash
+        | LeftBrace | RightBrace | LeftBracket | RightBracket | LeftParen | RightParen | Comma
+        | Semicolon | Colon | Star | Underscore | Dollar | Plus | Minus | Slash | Hat | Prime
+        | Dot | Eq | EqEq | ExclEq | Lt | LtEq | Gt | GtEq | PlusEq | HyphEq | StarEq | SlashEq
+        | Dots | Arrow | Root | Not | And | Or | None | Auto | As | Named | Keyed | Error | End => {
             return Option::None
         }
-        Text | Strong | Emph | Link | Label | Ref | RefMarker | Heading | HeadingMarker
-        | ListItem | ListMarker | EnumItem | EnumMarker | TermItem | TermMarker => {
-            InterpretMode::Markup
-        }
+        Strong | Emph | Link | Ref | RefMarker | Heading | HeadingMarker | ListItem
+        | ListMarker | EnumItem | EnumMarker | TermItem | TermMarker => InterpretMode::Markup,
         MathIdent | MathAlignPoint | MathDelimited | MathAttach | MathPrimes | MathFrac
         | MathRoot | MathShorthand => InterpretMode::Math,
         Let | Set | Show | Context | If | Else | For | In | While | Break | Continue | Return
@@ -290,7 +288,7 @@ pub(crate) fn interpret_mode_at_kind(k: SyntaxKind) -> Option<InterpretMode> {
 
 pub(crate) fn interpret_mode_at(mut leaf: Option<&LinkedNode>) -> InterpretMode {
     loop {
-        log::debug!("leaf for context: {leaf:?}");
+        crate::log_debug_ct!("leaf for context: {leaf:?}");
         if let Some(t) = leaf {
             if let Some(mode) = interpret_mode_at_kind(t.kind()) {
                 break mode;
@@ -359,11 +357,11 @@ pub fn get_deref_target(node: LinkedNode, cursor: usize) -> Option<DerefTarget<'
 
     // Move to the first ancestor that is an expression.
     let ancestor = deref_expr(node)?;
-    log::debug!("deref expr: {ancestor:?}");
+    crate::log_debug_ct!("deref expr: {ancestor:?}");
 
     // Unwrap all parentheses to get the actual expression.
     let cano_expr = deref_lvalue(ancestor)?;
-    log::debug!("deref lvalue: {cano_expr:?}");
+    crate::log_debug_ct!("deref lvalue: {cano_expr:?}");
 
     // Identify convenient expression kinds.
     let expr = cano_expr.cast::<ast::Expr>()?;
@@ -400,7 +398,7 @@ pub enum DefTarget<'a> {
     Import(LinkedNode<'a>),
 }
 
-impl<'a> DefTarget<'a> {
+impl DefTarget<'_> {
     pub fn node(&self) -> &LinkedNode {
         match self {
             DefTarget::Let(node) => node,
@@ -454,9 +452,9 @@ fn get_def_target_(node: LinkedNode, strict: bool) -> Option<DefTarget<'_>> {
     while !ancestor.is::<ast::Expr>() {
         ancestor = ancestor.parent()?.clone();
     }
-    log::debug!("def expr: {ancestor:?}");
+    crate::log_debug_ct!("def expr: {ancestor:?}");
     let ancestor = deref_lvalue(ancestor)?;
-    log::debug!("def lvalue: {ancestor:?}");
+    crate::log_debug_ct!("def lvalue: {ancestor:?}");
 
     let may_ident = ancestor.cast::<ast::Expr>()?;
     if strict && !may_ident.hash() && !matches!(may_ident, ast::Expr::MathIdent(_)) {
@@ -493,7 +491,7 @@ fn get_def_target_(node: LinkedNode, strict: bool) -> Option<DefTarget<'_>> {
         }
         _ if may_ident.hash() => return None,
         _ => {
-            log::debug!("unsupported kind {kind:?}", kind = ancestor.kind());
+            crate::log_debug_ct!("unsupported kind {kind:?}", kind = ancestor.kind());
             return None;
         }
     })
@@ -508,7 +506,7 @@ pub enum ParamTarget<'a> {
     },
     Named(LinkedNode<'a>),
 }
-impl<'a> ParamTarget<'a> {
+impl ParamTarget<'_> {
     pub(crate) fn positional_from_before(before: bool) -> Self {
         ParamTarget::Positional {
             spreads: EcoVec::new(),
@@ -908,7 +906,7 @@ mod tests {
         assert_snapshot!(map_deref(r#"#let x = 1  
 Text
 = Heading #let y = 2;  
-== Heading"#).trim(), @r###"
+== Heading"#).trim(), @r"
         #let x = 1  
          nnnnvvnnn  
         Text
@@ -916,11 +914,11 @@ Text
         = Heading #let y = 2;  
                    nnnnvvnnn   
         == Heading
-        "###);
-        assert_snapshot!(map_deref(r#"#let f(x);"#).trim(), @r###"
+        ");
+        assert_snapshot!(map_deref(r#"#let f(x);"#).trim(), @r"
         #let f(x);
          nnnnv v
-        "###);
+        ");
     }
 
     #[test]
@@ -928,7 +926,7 @@ Text
         assert_snapshot!(map_check(r#"#let x = 1  
 Text
 = Heading #let y = 2;  
-== Heading"#).trim(), @r###"
+== Heading"#).trim(), @r"
         #let x = 1  
          nnnnnnnnn  
         Text
@@ -936,36 +934,36 @@ Text
         = Heading #let y = 2;  
                    nnnnnnnnn   
         == Heading
-        "###);
-        assert_snapshot!(map_check(r#"#let f(x);"#).trim(), @r###"
+        ");
+        assert_snapshot!(map_check(r#"#let f(x);"#).trim(), @r"
         #let f(x);
          nnnnn n
-        "###);
-        assert_snapshot!(map_check(r#"#f(1, 2)   Test"#).trim(), @r###"
+        ");
+        assert_snapshot!(map_check(r#"#f(1, 2)   Test"#).trim(), @r"
         #f(1, 2)   Test
          npppppp
-        "###);
-        assert_snapshot!(map_check(r#"#()   Test"#).trim(), @r###"
+        ");
+        assert_snapshot!(map_check(r#"#()   Test"#).trim(), @r"
         #()   Test
          ee
-        "###);
-        assert_snapshot!(map_check(r#"#(1)   Test"#).trim(), @r###"
+        ");
+        assert_snapshot!(map_check(r#"#(1)   Test"#).trim(), @r"
         #(1)   Test
          PPP
-        "###);
-        assert_snapshot!(map_check(r#"#(a: 1)   Test"#).trim(), @r###"
+        ");
+        assert_snapshot!(map_check(r#"#(a: 1)   Test"#).trim(), @r"
         #(a: 1)   Test
          eeeeee
-        "###);
-        assert_snapshot!(map_check(r#"#(1, 2)   Test"#).trim(), @r###"
+        ");
+        assert_snapshot!(map_check(r#"#(1, 2)   Test"#).trim(), @r"
         #(1, 2)   Test
          eeeeee
-        "###);
+        ");
         assert_snapshot!(map_check(r#"#(1, 2)  
-  Test"#).trim(), @r###"
+  Test"#).trim(), @r"
         #(1, 2)  
          eeeeee  
           Test
-        "###);
+        ");
     }
 }

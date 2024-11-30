@@ -147,7 +147,7 @@ pub struct SigCheckDriver<'a> {
     checker: &'a mut dyn SigChecker,
 }
 
-impl<'a> SigCheckDriver<'a> {
+impl SigCheckDriver<'_> {
     fn func_as_sig(&self) -> bool {
         matches!(self.ctx.sig_kind, SigSurfaceKind::Call)
     }
@@ -167,7 +167,7 @@ impl<'a> SigCheckDriver<'a> {
     }
 
     fn ty(&mut self, ty: &Ty, pol: bool) {
-        log::debug!("check sig: {ty:?}");
+        crate::log_debug_ct!("check sig: {ty:?}");
         match ty {
             Ty::Builtin(BuiltinTy::Stroke) if self.dict_as_sig() => {
                 self.checker
@@ -254,7 +254,7 @@ impl<'a> SigCheckDriver<'a> {
 
 impl BoundChecker for SigCheckDriver<'_> {
     fn collect(&mut self, ty: &Ty, pol: bool) {
-        log::debug!("sig bounds: {ty:?}");
+        crate::log_debug_ct!("sig bounds: {ty:?}");
         self.ty(ty, pol);
     }
 }
@@ -263,7 +263,7 @@ impl BoundChecker for SigCheckDriver<'_> {
 #[bind(0)]
 struct MethodDriver<'a, 'b>(&'a mut SigCheckDriver<'b>, &'a StrRef);
 
-impl<'a, 'b> MethodDriver<'a, 'b> {
+impl MethodDriver<'_, '_> {
     fn is_binder(&self) -> bool {
         matches!(self.1.as_ref(), "with" | "where")
     }
@@ -280,9 +280,9 @@ impl<'a, 'b> MethodDriver<'a, 'b> {
     }
 }
 
-impl<'a, 'b> BoundChecker for MethodDriver<'a, 'b> {
+impl BoundChecker for MethodDriver<'_, '_> {
     fn collect(&mut self, ty: &Ty, pol: bool) {
-        log::debug!("check method: {ty:?}.{}", self.1.as_ref());
+        crate::log_debug_ct!("check method: {ty:?}.{}", self.1.as_ref());
         match ty {
             // todo: deduplicate checking early
             Ty::Value(v) => {

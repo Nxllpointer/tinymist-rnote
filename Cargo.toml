@@ -1,7 +1,7 @@
 [workspace.package]
 description = "An integrated language service for Typst."
 authors = ["Myriad-Dreamin <camiyoru@gmail.com>", "Nathan Varner"]
-version = "0.12.2"
+version = "0.12.6-rc1"
 edition = "2021"
 readme = "README.md"
 license = "Apache-2.0"
@@ -104,7 +104,6 @@ reflexo-typst-shim = { version = "0.5.0-rc9", features = ["nightly"] }
 
 
 typst = "0.12.0" # Marker to cause merge conflicts on version bump
-typst-kit = "0.12.0"
 typst-timing = "0.12.0"
 typst-svg = "0.12.0"
 typst-render = "0.12.0"
@@ -112,7 +111,7 @@ typst-pdf = "0.12.0"
 typst-syntax = "0.12.0"
 typst-assets = "0.12.0"
 typstfmt_lib = { git = "https://github.com/astrale-sharp/typstfmt", tag = "0.2.7" }
-typstyle = { version = "0.12.1", default-features = false }
+typstyle = { version = "0.12.5", default-features = false }
 typlite = { path = "./crates/typlite" }
 typst-shim = { path = "./crates/typst-shim", features = ["nightly"] }
 
@@ -145,7 +144,7 @@ insta = { version = "1.39", features = ["glob"] }
 
 # Our Own Crates
 typst-preview = { path = "./crates/typst-preview" }
-tinymist-assets = { version = "0.12.2" }
+tinymist-assets = { version = "0.12.6-rc1" }
 tinymist = { path = "./crates/tinymist/" }
 tinymist-derive = { path = "./crates/tinymist-derive/" }
 tinymist-analysis = { path = "./crates/tinymist-analysis/" }
@@ -177,6 +176,18 @@ uninlined_format_args = "warn"
 # missing_panics_doc = "warn"
 missing_safety_doc = "warn"
 undocumented_unsafe_blocks = "warn"
+
+[workspace.metadata.typos.default]
+locale = "en-us"
+
+[workspace.metadata.typos.default.extend-words]
+labelled = "labelled"
+onces = "onces"
+withs = "withs"
+
+[workspace.metadata.typos.files]
+ignore-hidden = false
+extend-exclude = ["/.git", "fixtures", "upstream"]
 
 [patch.crates-io]
 

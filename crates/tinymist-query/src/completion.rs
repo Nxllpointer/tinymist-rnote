@@ -48,12 +48,6 @@ pub struct CompletionRequest {
     pub explicit: bool,
     /// The character that triggered the completion, if any.
     pub trigger_character: Option<char>,
-    /// Whether to trigger suggest completion, a.k.a. auto-completion.
-    pub trigger_suggest: bool,
-    /// Whether to trigger named parameter completion.
-    pub trigger_named_completion: bool,
-    /// Whether to trigger parameter hint, a.k.a. signature help.
-    pub trigger_parameter_hints: bool,
 }
 
 impl StatefulRequest for CompletionRequest {
@@ -64,6 +58,15 @@ impl StatefulRequest for CompletionRequest {
         ctx: &mut LocalContext,
         doc: Option<VersionedDocument>,
     ) -> Option<Self::Response> {
+        // These trigger characters are for completion on positional arguments,
+        // which follows the configuration item
+        // `tinymist.completion.triggerOnSnippetPlaceholders`.
+        if matches!(self.trigger_character, Some('(' | ',' | ':'))
+            && !ctx.analysis.completion_feat.trigger_on_snippet_placeholders
+        {
+            return None;
+        }
+
         let doc = doc.as_ref().map(|doc| doc.document.as_ref());
         let source = ctx.source_by_path(&self.path).ok()?;
         let (cursor, deref_target) = ctx.deref_syntax_at_(&source, self.position, 0)?;
@@ -98,6 +101,27 @@ impl StatefulRequest for CompletionRequest {
             }
         }
 
+        // Skip if an error node starts with number (e.g. `1pt`)
+        if matches!(
+            deref_target,
+            Some(DerefTarget::Callee(..) | DerefTarget::VarAccess(..) | DerefTarget::Normal(..),)
+        ) {
+            let node = LinkedNode::new(source.root()).leaf_at_compat(cursor)?;
+            if node.erroneous() {
+                let mut n = node.text().chars();
+
+                match n.next() {
+                    Some(c) if c.is_numeric() => return None,
+                    Some('.') => {
+                        if matches!(n.next(), Some(c) if c.is_numeric()) {
+                            return None;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         // Do some completion specific to the deref target
         let mut ident_like = None;
         let mut completion_result = None;
@@ -126,7 +150,7 @@ impl StatefulRequest for CompletionRequest {
                     let ty_chk = ctx.type_check(&source);
 
                     let ty = ty_chk.type_of_span(cano_expr.span());
-                    log::debug!("check string ty: {ty:?}");
+                    crate::log_debug_ct!("check string ty: {ty:?}");
                     if let Some(Ty::Builtin(BuiltinTy::Path(path_filter))) = ty {
                         completion_result =
                             complete_path(ctx, Some(cano_expr), &source, cursor, &path_filter);
@@ -148,9 +172,6 @@ impl StatefulRequest for CompletionRequest {
                 cursor,
                 explicit,
                 self.trigger_character,
-                self.trigger_suggest,
-                self.trigger_parameter_hints,
-                self.trigger_named_completion,
             )?;
 
             // Exclude it self from auto completion
@@ -403,9 +424,6 @@ mod tests {
                     position: ctx.to_lsp_pos(s, &source),
                     explicit: false,
                     trigger_character,
-                    trigger_suggest: true,
-                    trigger_parameter_hints: true,
-                    trigger_named_completion: true,
                 };
                 results.push(request.request(ctx, doc.clone()).map(|resp| match resp {
                     CompletionResponse::List(l) => CompletionResponse::List(CompletionList {
