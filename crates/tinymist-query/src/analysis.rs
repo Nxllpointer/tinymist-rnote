@@ -6,10 +6,16 @@ use std::path::Path;
 pub(crate) use bib::*;
 pub mod call;
 pub use call::*;
-pub mod color_exprs;
-pub use color_exprs::*;
-pub mod link_exprs;
-pub use link_exprs::*;
+pub mod completion;
+pub use completion::*;
+pub mod code_action;
+pub use code_action::*;
+pub mod color_expr;
+pub use color_expr::*;
+pub mod doc_highlight;
+pub use doc_highlight::*;
+pub mod link_expr;
+pub use link_expr::*;
 pub mod stats;
 pub use stats::*;
 pub mod definition;
@@ -47,8 +53,8 @@ pub(crate) trait ToFunc {
 impl ToFunc for Value {
     fn to_func(&self) -> Option<Func> {
         match self {
-            Value::Func(f) => Some(f.clone()),
-            Value::Type(t) => t.constructor().ok(),
+            Value::Func(func) => Some(func.clone()),
+            Value::Type(ty) => ty.constructor().ok(),
             _ => None,
         }
     }
@@ -57,39 +63,39 @@ impl ToFunc for Value {
 /// Extension trait for `typst::World`.
 pub trait LspWorldExt {
     /// Get file's id by its path
-    fn file_id_by_path(&self, p: &Path) -> FileResult<TypstFileId>;
+    fn file_id_by_path(&self, path: &Path) -> FileResult<TypstFileId>;
 
     /// Get the source of a file by file path.
-    fn source_by_path(&self, p: &Path) -> FileResult<Source>;
+    fn source_by_path(&self, path: &Path) -> FileResult<Source>;
 
     /// Resolve the uri for a file id.
-    fn uri_for_id(&self, id: TypstFileId) -> FileResult<Url>;
+    fn uri_for_id(&self, fid: TypstFileId) -> FileResult<Url>;
 }
 
 impl LspWorldExt for tinymist_world::LspWorld {
-    fn file_id_by_path(&self, p: &Path) -> FileResult<TypstFileId> {
+    fn file_id_by_path(&self, path: &Path) -> FileResult<TypstFileId> {
         // todo: source in packages
         let root = self.workspace_root().ok_or_else(|| {
             let reason = eco_format!("workspace root not found");
             FileError::Other(Some(reason))
         })?;
-        let relative_path = p.strip_prefix(&root).map_err(|_| {
-            let reason = eco_format!("access denied, path: {p:?}, root: {root:?}");
+        let relative_path = path.strip_prefix(&root).map_err(|_| {
+            let reason = eco_format!("access denied, path: {path:?}, root: {root:?}");
             FileError::Other(Some(reason))
         })?;
 
         Ok(TypstFileId::new(None, VirtualPath::new(relative_path)))
     }
 
-    fn source_by_path(&self, p: &Path) -> FileResult<Source> {
+    fn source_by_path(&self, path: &Path) -> FileResult<Source> {
         // todo: source cache
-        self.source(self.file_id_by_path(p)?)
+        self.source(self.file_id_by_path(path)?)
     }
 
-    fn uri_for_id(&self, id: TypstFileId) -> Result<Url, FileError> {
-        self.path_for_id(id).and_then(|e| {
-            path_to_url(&e)
-                .map_err(|e| FileError::Other(Some(eco_format!("convert to url: {e:?}"))))
+    fn uri_for_id(&self, fid: TypstFileId) -> Result<Url, FileError> {
+        self.path_for_id(fid).and_then(|path| {
+            path_to_url(&path)
+                .map_err(|err| FileError::Other(Some(eco_format!("convert to url: {err:?}"))))
         })
     }
 }
@@ -100,7 +106,7 @@ mod matcher_tests {
     use typst::syntax::LinkedNode;
     use typst_shim::syntax::LinkedNodeExt;
 
-    use crate::{syntax::get_def_target, tests::*};
+    use crate::{syntax::classify_def, tests::*};
 
     #[test]
     fn test() {
@@ -114,10 +120,10 @@ mod matcher_tests {
             let root = LinkedNode::new(source.root());
             let node = root.leaf_at_compat(pos).unwrap();
 
-            let result = get_def_target(node).map(|e| format!("{:?}", e.node().range()));
-            let result = result.as_deref().unwrap_or("<nil>");
+            let snap = classify_def(node).map(|def| format!("{:?}", def.node().range()));
+            let snap = snap.as_deref().unwrap_or("<nil>");
 
-            assert_snapshot!(result);
+            assert_snapshot!(snap);
         });
     }
 }
@@ -197,17 +203,17 @@ mod expr_tests {
                         decl: ident,
                         step,
                         root,
-                        val,
+                        term,
                     } = expr.as_ref();
 
                     format!(
-                        "{} -> {}, root {}, val: {val:?}",
+                        "{} -> {}, root {}, val: {term:?}",
                         source.show_expr(&Expr::Decl(ident.clone())),
                         step.as_ref()
-                            .map(|e| source.show_expr(e))
+                            .map(|expr| source.show_expr(expr))
                             .unwrap_or_default(),
                         root.as_ref()
-                            .map(|e| source.show_expr(e))
+                            .map(|expr| source.show_expr(expr))
                             .unwrap_or_default()
                     )
                 })
@@ -269,7 +275,7 @@ mod module_tests {
 
             dependencies.sort();
             // remove /main.typ
-            dependencies.retain(|(p, _, _)| p != "/main.typ");
+            dependencies.retain(|(path, _, _)| path != "/main.typ");
 
             let dependencies = dependencies
                 .into_iter()
@@ -296,7 +302,7 @@ mod type_check_tests {
 
     use crate::tests::*;
 
-    use super::{Ty, TypeScheme};
+    use super::{Ty, TypeInfo};
 
     #[test]
     fn test() {
@@ -310,7 +316,7 @@ mod type_check_tests {
         });
     }
 
-    struct TypeCheckSnapshot<'a>(&'a Source, &'a TypeScheme);
+    struct TypeCheckSnapshot<'a>(&'a Source, &'a TypeInfo);
 
     impl fmt::Debug for TypeCheckSnapshot<'_> {
         fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -318,21 +324,21 @@ mod type_check_tests {
             let info = self.1;
             let mut vars = info
                 .vars
-                .iter()
-                .map(|e| (e.1.name(), e.1))
+                .values()
+                .map(|bounds| (bounds.name(), bounds))
                 .collect::<Vec<_>>();
 
             vars.sort_by(|x, y| x.1.var.cmp(&y.1.var));
 
-            for (name, var) in vars {
-                writeln!(f, "{:?} = {:?}", name, info.simplify(var.as_type(), true))?;
+            for (name, bounds) in vars {
+                writeln!(f, "{name:?} = {:?}", info.simplify(bounds.as_type(), true))?;
             }
 
             writeln!(f, "=====")?;
             let mut mapping = info
                 .mapping
                 .iter()
-                .map(|e| (source.range(*e.0).unwrap_or_default(), e.1))
+                .map(|pair| (source.range(*pair.0).unwrap_or_default(), pair.1))
                 .collect::<Vec<_>>();
 
             mapping.sort_by(|x, y| {
@@ -374,14 +380,14 @@ mod post_type_check_tests {
             let text = node.get().clone().into_text();
 
             let result = ctx.type_check(&source);
-            let literal_type = post_type_check(ctx.shared_(), &result, node);
+            let post_ty = post_type_check(ctx.shared_(), &result, node);
 
             with_settings!({
                 description => format!("Check on {text:?} ({pos:?})"),
             }, {
-                let literal_type = literal_type.map(|e| format!("{e:#?}"))
+                let post_ty = post_ty.map(|ty| format!("{ty:#?}"))
                     .unwrap_or_else(|| "<nil>".to_string());
-                assert_snapshot!(literal_type);
+                assert_snapshot!(post_ty);
             })
         });
     }
@@ -409,15 +415,15 @@ mod type_describe_tests {
             let node = root.leaf_at_compat(pos + 1).unwrap();
             let text = node.get().clone().into_text();
 
-            let result = ctx.type_check(&source);
-            let literal_type = post_type_check(ctx.shared_(), &result, node);
+            let ti = ctx.type_check(&source);
+            let post_ty = post_type_check(ctx.shared_(), &ti, node);
 
             with_settings!({
                 description => format!("Check on {text:?} ({pos:?})"),
             }, {
-                let literal_type = literal_type.and_then(|e| e.describe())
+                let post_ty = post_ty.and_then(|ty| ty.describe())
                     .unwrap_or_else(|| "<nil>".into());
-                assert_snapshot!(literal_type);
+                assert_snapshot!(post_ty);
             })
         });
     }
@@ -432,7 +438,7 @@ mod signature_tests {
     use typst_shim::syntax::LinkedNodeExt;
 
     use crate::analysis::{analyze_signature, Signature, SignatureTarget};
-    use crate::syntax::get_deref_target;
+    use crate::syntax::classify_syntax;
     use crate::tests::*;
 
     #[test]
@@ -446,7 +452,7 @@ mod signature_tests {
 
             let root = LinkedNode::new(source.root());
             let callee_node = root.leaf_at_compat(pos).unwrap();
-            let callee_node = get_deref_target(callee_node, pos).unwrap();
+            let callee_node = classify_syntax(callee_node, pos).unwrap();
             let callee_node = callee_node.node();
 
             let result = analyze_signature(

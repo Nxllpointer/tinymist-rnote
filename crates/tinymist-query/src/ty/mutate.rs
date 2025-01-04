@@ -10,18 +10,18 @@ pub trait TyMutator {
             Value(..) | Any | Boolean(..) | Builtin(..) => None,
             Union(v) => Some(Union(self.mutate_vec(v, pol)?)),
             Var(..) | Let(..) => None,
-            Array(e) => Some(Array(self.mutate(e, pol)?.into())),
-            Dict(r) => Some(Dict(self.mutate_record(r, pol)?.into())),
-            Tuple(e) => Some(Tuple(self.mutate_vec(e, pol)?)),
-            Func(f) => Some(Func(self.mutate_func(f, pol)?.into())),
+            Array(arr) => Some(Array(self.mutate(arr, pol)?.into())),
+            Dict(dict) => Some(Dict(self.mutate_record(dict, pol)?.into())),
+            Tuple(tup) => Some(Tuple(self.mutate_vec(tup, pol)?)),
+            Func(func) => Some(Func(self.mutate_func(func, pol)?.into())),
             Args(args) => Some(Args(self.mutate_func(args, pol)?.into())),
-            Pattern(args) => Some(Pattern(self.mutate_func(args, pol)?.into())),
-            Param(f) => Some(Param(self.mutate_param(f, pol)?.into())),
-            Select(s) => Some(Select(self.mutate_select(s, pol)?.into())),
-            With(w) => Some(With(self.mutate_with_sig(w, pol)?.into())),
-            Unary(u) => Some(Unary(self.mutate_unary(u, pol)?.into())),
-            Binary(b) => Some(Binary(self.mutate_binary(b, pol)?.into())),
-            If(i) => Some(If(self.mutate_if(i, pol)?.into())),
+            Pattern(pat) => Some(Pattern(self.mutate_func(pat, pol)?.into())),
+            Param(param) => Some(Param(self.mutate_param(param, pol)?.into())),
+            Select(sel) => Some(Select(self.mutate_select(sel, pol)?.into())),
+            With(sig) => Some(With(self.mutate_with_sig(sig, pol)?.into())),
+            Unary(unary) => Some(Unary(self.mutate_unary(unary, pol)?.into())),
+            Binary(binary) => Some(Binary(self.mutate_binary(binary, pol)?.into())),
+            If(if_expr) => Some(If(self.mutate_if(if_expr, pol)?.into())),
         }
     }
 
@@ -71,17 +71,17 @@ pub trait TyMutator {
         })
     }
 
-    fn mutate_param(&mut self, f: &Interned<ParamTy>, pol: bool) -> Option<ParamTy> {
-        let ty = self.mutate(&f.ty, pol)?;
-        let mut f = f.as_ref().clone();
-        f.ty = ty;
-        Some(f)
+    fn mutate_param(&mut self, param: &Interned<ParamTy>, pol: bool) -> Option<ParamTy> {
+        let ty = self.mutate(&param.ty, pol)?;
+        let mut param = param.as_ref().clone();
+        param.ty = ty;
+        Some(param)
     }
 
-    fn mutate_record(&mut self, ty: &Interned<RecordTy>, pol: bool) -> Option<RecordTy> {
-        let types = self.mutate_vec(&ty.types, pol)?;
+    fn mutate_record(&mut self, record: &Interned<RecordTy>, pol: bool) -> Option<RecordTy> {
+        let types = self.mutate_vec(&record.types, pol)?;
 
-        let rec = ty.as_ref().clone();
+        let rec = record.as_ref().clone();
         Some(RecordTy { types, ..rec })
     }
 

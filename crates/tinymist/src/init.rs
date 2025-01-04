@@ -3,22 +3,22 @@ use std::sync::Arc;
 
 use anyhow::bail;
 use clap::Parser;
+use font::TinymistFontResolver;
 use itertools::Itertools;
 use lsp_types::*;
 use once_cell::sync::{Lazy, OnceCell};
 use reflexo::path::PathClean;
-use reflexo_typst::font::FontResolverImpl;
 use reflexo_typst::world::EntryState;
 use reflexo_typst::{ImmutPath, TypstDict};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value as JsonValue};
 use strum::IntoEnumIterator;
-use task::FormatUserConfig;
+use task::{FormatUserConfig, FormatterConfig};
 use tinymist_query::analysis::{Modifier, TokenType};
-use tinymist_query::{CompletionFeat, PositionEncoding};
+use tinymist_query::{CompletionFeat, EntryResolver, PositionEncoding};
 use tinymist_render::PeriscopeArgs;
 use typst::foundations::IntoValue;
-use typst::syntax::{FileId, VirtualPath};
+use typst::syntax::FileId;
 use typst_shim::utils::{Deferred, LazyHash};
 
 // todo: svelte-language-server responds to a Goto Definition request with
@@ -70,22 +70,26 @@ impl Initializer for RegularInit {
     /// Errors if the configuration could not be updated.
     fn initialize(mut self, params: InitializeParams) -> (LanguageState, AnySchedulableResponse) {
         // Initialize configurations
+        let roots = match params.workspace_folders.as_ref() {
+            Some(roots) => roots
+                .iter()
+                .filter_map(|root| root.uri.to_file_path().ok().map(ImmutPath::from))
+                .collect(),
+            #[allow(deprecated)] // `params.root_path` is marked as deprecated
+            None => params
+                .root_uri
+                .as_ref()
+                .and_then(|uri| uri.to_file_path().ok().map(ImmutPath::from))
+                .or_else(|| Some(Path::new(&params.root_path.as_ref()?).into()))
+                .into_iter()
+                .collect(),
+        };
         let mut config = Config {
             const_config: ConstConfig::from(&params),
             compile: CompileConfig {
-                roots: match params.workspace_folders.as_ref() {
-                    Some(roots) => roots
-                        .iter()
-                        .filter_map(|root| root.uri.to_file_path().ok())
-                        .collect::<Vec<_>>(),
-                    #[allow(deprecated)] // `params.root_path` is marked as deprecated
-                    None => params
-                        .root_uri
-                        .as_ref()
-                        .map(|uri| uri.to_file_path().unwrap())
-                        .or_else(|| params.root_path.clone().map(PathBuf::from))
-                        .into_iter()
-                        .collect(),
+                entry_resolver: EntryResolver {
+                    roots,
+                    ..Default::default()
                 },
                 font_opts: std::mem::take(&mut self.font_opts),
                 ..CompileConfig::default()
@@ -392,9 +396,19 @@ impl Config {
 
     /// Get the formatter configuration.
     pub fn formatter(&self) -> FormatUserConfig {
+        let formatter_print_width = self.formatter_print_width.unwrap_or(120) as usize;
+
         FormatUserConfig {
-            mode: self.formatter_mode,
-            width: self.formatter_print_width.unwrap_or(120),
+            config: match self.formatter_mode {
+                FormatterMode::Typstyle => FormatterConfig::Typstyle(Box::new(
+                    typstyle_core::PrinterConfig::new_with_width(formatter_print_width),
+                )),
+                FormatterMode::Typstfmt => FormatterConfig::Typstfmt(Box::new(typstfmt::Config {
+                    max_line_length: formatter_print_width,
+                    ..typstfmt::Config::default()
+                })),
+                FormatterMode::Disable => FormatterConfig::Disable,
+            },
             position_encoding: self.const_config.position_encoding,
         }
     }
@@ -468,14 +482,10 @@ impl From<&InitializeParams> for ConstConfig {
 /// The user configuration read from the editor.
 #[derive(Debug, Default, Clone)]
 pub struct CompileConfig {
-    /// The workspace roots from initialization.
-    pub roots: Vec<PathBuf>,
     /// The output directory for PDF export.
     pub output_path: PathPattern,
     /// The mode of PDF export.
     pub export_pdf: ExportMode,
-    /// Specifies the root path of the project manually.
-    pub root_path: Option<PathBuf>,
     /// Specifies the cli font options
     pub font_opts: CompileFontArgs,
     /// Whether to ignore system fonts
@@ -483,7 +493,7 @@ pub struct CompileConfig {
     /// Specifies the font paths
     pub font_paths: Vec<PathBuf>,
     /// Computed fonts based on configuration.
-    pub fonts: OnceCell<Derived<Deferred<Arc<FontResolverImpl>>>>,
+    pub fonts: OnceCell<Derived<Deferred<Arc<TinymistFontResolver>>>>,
     /// Notify the compile status to the editor.
     pub notify_status: bool,
     /// Enable periscope document in hover.
@@ -496,6 +506,8 @@ pub struct CompileConfig {
     pub has_default_entry_path: bool,
     /// The inputs for the language server protocol.
     pub lsp_inputs: ImmutDict,
+    /// The entry resolver.
+    pub entry_resolver: EntryResolver,
 }
 
 impl CompileConfig {
@@ -518,7 +530,6 @@ impl CompileConfig {
 
         self.output_path = deser_or_default!("outputPath", PathPattern);
         self.export_pdf = deser_or_default!("exportPdf", ExportMode);
-        self.root_path = try_(|| Some(update.get("rootPath")?.as_str()?.into()));
         self.notify_status = match try_(|| update.get("compileStatus")?.as_str()) {
             Some("enable") => true,
             Some("disable") | None => false,
@@ -573,18 +584,26 @@ impl CompileConfig {
             // todo: the command.root may be not absolute
             self.typst_extra_args = Some(CompileExtraOpts {
                 entry: command.input.map(|e| Path::new(&e).into()),
-                root_dir: command.root,
+                root_dir: command.root.as_ref().map(|r| r.as_path().into()),
                 inputs: Arc::new(LazyHash::new(inputs)),
                 font: command.font,
+                package: command.package,
                 creation_timestamp: command.creation_timestamp,
-                cert: command.certification,
+                cert: command.cert.as_deref().map(From::from),
             });
         }
 
         self.font_paths = try_or_default(|| Vec::<_>::deserialize(update.get("fontPaths")?).ok());
         self.system_fonts = try_(|| update.get("systemFonts")?.as_bool());
 
-        self.has_default_entry_path = self.determine_default_entry_path().is_some();
+        self.entry_resolver.root_path =
+            try_(|| Some(Path::new(update.get("rootPath")?.as_str()?).into())).or_else(|| {
+                self.typst_extra_args
+                    .as_ref()
+                    .and_then(|e| e.root_dir.clone())
+            });
+        self.entry_resolver.entry = self.typst_extra_args.as_ref().and_then(|e| e.entry.clone());
+        self.has_default_entry_path = self.entry_resolver.resolve_default().is_some();
         self.lsp_inputs = {
             let mut dict = TypstDict::default();
 
@@ -611,86 +630,6 @@ impl CompileConfig {
         self.validate()
     }
 
-    /// Determines the root directory for the entry file.
-    pub fn determine_root(&self, entry: Option<&ImmutPath>) -> Option<ImmutPath> {
-        if let Some(path) = &self.root_path {
-            return Some(path.as_path().into());
-        }
-
-        if let Some(root) = try_(|| self.typst_extra_args.as_ref()?.root_dir.as_ref()) {
-            return Some(root.as_path().into());
-        }
-
-        if let Some(entry) = entry {
-            for root in self.roots.iter() {
-                if entry.starts_with(root) {
-                    return Some(root.as_path().into());
-                }
-            }
-
-            if !self.roots.is_empty() {
-                log::warn!("entry is not in any set root directory");
-            }
-
-            if let Some(parent) = entry.parent() {
-                return Some(parent.into());
-            }
-        }
-
-        if !self.roots.is_empty() {
-            return Some(self.roots[0].as_path().into());
-        }
-
-        None
-    }
-
-    /// Determines the default entry path.
-    pub fn determine_default_entry_path(&self) -> Option<ImmutPath> {
-        let extras = self.typst_extra_args.as_ref()?;
-        // todo: pre-compute this when updating config
-        if let Some(entry) = &extras.entry {
-            if entry.is_relative() {
-                let root = self.determine_root(None)?;
-                return Some(root.join(entry).as_path().into());
-            }
-        }
-        extras.entry.clone()
-    }
-
-    /// Determines the entry state.
-    pub fn determine_entry(&self, entry: Option<ImmutPath>) -> EntryState {
-        // todo: formalize untitled path
-        // let is_untitled = entry.as_ref().is_some_and(|p| p.starts_with("/untitled"));
-        // let root_dir = self.determine_root(if is_untitled { None } else {
-        // entry.as_ref() });
-        let root_dir = self.determine_root(entry.as_ref());
-
-        let entry = match (entry, root_dir) {
-            // (Some(entry), Some(root)) if is_untitled => Some(EntryState::new_rooted(
-            //     root,
-            //     Some(FileId::new(None, VirtualPath::new(entry))),
-            // )),
-            (Some(entry), Some(root)) => match entry.strip_prefix(&root) {
-                Ok(stripped) => Some(EntryState::new_rooted(
-                    root,
-                    Some(FileId::new(None, VirtualPath::new(stripped))),
-                )),
-                Err(err) => {
-                    log::info!("Entry is not in root directory: err {err:?}: entry: {entry:?}, root: {root:?}");
-                    EntryState::new_rootless(entry)
-                }
-            },
-            (Some(entry), None) => EntryState::new_rootless(entry),
-            (None, Some(root)) => Some(EntryState::new_workspace(root)),
-            (None, None) => None,
-        };
-
-        entry.unwrap_or_else(|| match self.determine_root(None) {
-            Some(root) => EntryState::new_workspace(root),
-            None => EntryState::new_detached(),
-        })
-    }
-
     /// Determines the font options.
     pub fn determine_font_opts(&self) -> CompileFontArgs {
         let mut opts = self.font_opts.clone();
@@ -713,7 +652,7 @@ impl CompileConfig {
         let root = OnceCell::new();
         for path in opts.font_paths.iter_mut() {
             if path.is_relative() {
-                if let Some(root) = root.get_or_init(|| self.determine_root(None)) {
+                if let Some(root) = root.get_or_init(|| self.entry_resolver.root(None)) {
                     let p = std::mem::take(path);
                     *path = root.join(p);
                 }
@@ -723,8 +662,16 @@ impl CompileConfig {
         opts
     }
 
+    /// Determines the package options.
+    pub fn determine_package_opts(&self) -> CompilePackageArgs {
+        if let Some(extras) = &self.typst_extra_args {
+            return extras.package.clone();
+        }
+        CompilePackageArgs::default()
+    }
+
     /// Determines the font resolver.
-    pub fn determine_fonts(&self) -> Deferred<Arc<FontResolverImpl>> {
+    pub fn determine_fonts(&self) -> Deferred<Arc<TinymistFontResolver>> {
         // todo: on font resolving failure, downgrade to a fake font book
         let font = || {
             let opts = self.determine_font_opts();
@@ -762,7 +709,7 @@ impl CompileConfig {
     }
 
     /// Determines the certification path.
-    pub fn determine_certification_path(&self) -> Option<PathBuf> {
+    pub fn determine_certification_path(&self) -> Option<ImmutPath> {
         let extras = self.typst_extra_args.as_ref()?;
         extras.cert.clone()
     }
@@ -791,25 +738,14 @@ impl CompileConfig {
             self.system_fonts,
             &self.font_paths,
             self.typst_extra_args.as_ref().map(|e| &e.font),
-            self.determine_root(self.determine_default_entry_path().as_ref()),
+            self.entry_resolver
+                .root(self.entry_resolver.resolve_default().as_ref()),
         )
     }
 
     /// Validates the configuration.
     pub fn validate(&self) -> anyhow::Result<()> {
-        if let Some(root) = &self.root_path {
-            if !root.is_absolute() {
-                bail!("rootPath must be an absolute path: {root:?}");
-            }
-        }
-
-        if let Some(extra_args) = &self.typst_extra_args {
-            if let Some(root) = &extra_args.root_dir {
-                if !root.is_absolute() {
-                    bail!("typstExtraArgs.root must be an absolute path: {root:?}");
-                }
-            }
-        }
+        self.entry_resolver.validate()?;
 
         Ok(())
     }
@@ -873,17 +809,19 @@ pub(crate) fn get_semantic_tokens_options() -> SemanticTokensOptions {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct CompileExtraOpts {
     /// The root directory for compilation routine.
-    pub root_dir: Option<PathBuf>,
+    pub root_dir: Option<ImmutPath>,
     /// Path to entry
     pub entry: Option<ImmutPath>,
     /// Additional input arguments to compile the entry file.
     pub inputs: ImmutDict,
     /// Additional font paths.
     pub font: CompileFontArgs,
+    /// Package related arguments.
+    pub package: CompilePackageArgs,
     /// The creation timestamp for various output.
     pub creation_timestamp: Option<chrono::DateTime<chrono::Utc>>,
     /// Path to certification file
-    pub cert: Option<PathBuf>,
+    pub cert: Option<ImmutPath>,
 }
 
 /// The path pattern that could be substituted.
@@ -955,6 +893,7 @@ impl PathPattern {
 mod tests {
     use super::*;
     use serde_json::json;
+    use typst::syntax::VirtualPath;
 
     #[test]
     fn test_default_encoding() {
@@ -966,7 +905,7 @@ mod tests {
     fn test_config_update() {
         let mut config = Config::default();
 
-        let root_path = if cfg!(windows) { "C:\\root" } else { "/root" };
+        let root_path = Path::new(if cfg!(windows) { "C:\\root" } else { "/root" });
 
         let update = json!({
             "outputPath": "out",
@@ -989,13 +928,16 @@ mod tests {
 
         assert_eq!(config.compile.output_path, PathPattern::new("out"));
         assert_eq!(config.compile.export_pdf, ExportMode::OnSave);
-        assert_eq!(config.compile.root_path, Some(PathBuf::from(root_path)));
+        assert_eq!(
+            config.compile.entry_resolver.root_path,
+            Some(ImmutPath::from(root_path))
+        );
         assert_eq!(config.semantic_tokens, SemanticTokensMode::Enable);
         assert_eq!(config.formatter_mode, FormatterMode::Typstyle);
         assert_eq!(
             config.compile.typst_extra_args,
             Some(CompileExtraOpts {
-                root_dir: Some(PathBuf::from(root_path)),
+                root_dir: Some(ImmutPath::from(root_path)),
                 ..Default::default()
             })
         );
@@ -1155,8 +1097,42 @@ mod tests {
     #[test]
     fn test_default_formatting_config() {
         let config = Config::default().formatter();
-        assert_eq!(config.mode, FormatterMode::Disable);
-        assert_eq!(config.width, 120);
+        assert!(matches!(config.config, FormatterConfig::Disable));
         assert_eq!(config.position_encoding, PositionEncoding::Utf16);
+    }
+
+    #[test]
+    fn test_typstyle_formatting_config() {
+        let config = Config {
+            formatter_mode: FormatterMode::Typstyle,
+            ..Config::default()
+        };
+        let config = config.formatter();
+        assert_eq!(config.position_encoding, PositionEncoding::Utf16);
+
+        let typstyle_config = match config.config {
+            FormatterConfig::Typstyle(e) => e,
+            _ => panic!("unexpected configuration of formatter"),
+        };
+
+        assert_eq!(typstyle_config.max_width, 120);
+    }
+
+    #[test]
+    fn test_typstyle_formatting_config_set_width() {
+        let config = Config {
+            formatter_mode: FormatterMode::Typstyle,
+            formatter_print_width: Some(240),
+            ..Config::default()
+        };
+        let config = config.formatter();
+        assert_eq!(config.position_encoding, PositionEncoding::Utf16);
+
+        let typstyle_config = match config.config {
+            FormatterConfig::Typstyle(e) => e,
+            _ => panic!("unexpected configuration of formatter"),
+        };
+
+        assert_eq!(typstyle_config.max_width, 240);
     }
 }

@@ -5,7 +5,7 @@ use typst::introspection::Introspector;
 use typst::model::BibliographyElem;
 
 use super::{prelude::*, InsTy, SharedContext};
-use crate::syntax::{Decl, DeclExpr, DerefTarget, Expr, ExprInfo};
+use crate::syntax::{Decl, DeclExpr, Expr, ExprInfo, SyntaxClass, VarClass};
 use crate::ty::DocSource;
 use crate::VersionedDocument;
 
@@ -37,7 +37,7 @@ impl Definition {
 
     /// The location of the definition.
     // todo: cache
-    pub(crate) fn def_at(&self, ctx: &SharedContext) -> Option<(TypstFileId, Range<usize>)> {
+    pub(crate) fn location(&self, ctx: &SharedContext) -> Option<(TypstFileId, Range<usize>)> {
         let fid = self.decl.file_id()?;
         let span = self.decl.span();
         let range = (!span.is_detached()).then(|| ctx.source_by_id(fid).ok()?.range(span));
@@ -60,17 +60,20 @@ pub fn definition(
     ctx: &Arc<SharedContext>,
     source: &Source,
     document: Option<&VersionedDocument>,
-    deref_target: DerefTarget,
+    syntax: SyntaxClass,
 ) -> Option<Definition> {
-    match deref_target {
-        // todi: field access
-        DerefTarget::VarAccess(node) | DerefTarget::Callee(node) => {
-            find_ident_definition(ctx, source, node)
-        }
-        DerefTarget::ImportPath(path) | DerefTarget::IncludePath(path) => {
+    match syntax {
+        // todo: field access
+        SyntaxClass::VarAccess(node) => find_ident_definition(ctx, source, node),
+        SyntaxClass::Callee(node) => find_ident_definition(ctx, source, VarClass::Ident(node)),
+        SyntaxClass::ImportPath(path) | SyntaxClass::IncludePath(path) => {
             DefResolver::new(ctx, source)?.of_span(path.span())
         }
-        DerefTarget::Label(r) | DerefTarget::Ref(r) => {
+        SyntaxClass::Label {
+            node: r,
+            is_error: false,
+        }
+        | SyntaxClass::Ref(r) => {
             let ref_expr: ast::Expr = r.cast()?;
             let name = match ref_expr {
                 ast::Expr::Ref(r) => r.target(),
@@ -79,26 +82,30 @@ pub fn definition(
             };
 
             let introspector = &document?.document.introspector;
-            find_bib_definition(ctx, introspector, name)
-                .or_else(|| find_ref_definition(introspector, name, ref_expr))
+            bib_definition(ctx, introspector, name)
+                .or_else(|| ref_definition(introspector, name, ref_expr))
         }
-        DerefTarget::Normal(..) => None,
+        SyntaxClass::Label {
+            node: _,
+            is_error: true,
+        }
+        | SyntaxClass::Normal(..) => None,
     }
 }
 
 fn find_ident_definition(
     ctx: &Arc<SharedContext>,
     source: &Source,
-    use_site: LinkedNode,
+    use_site: VarClass,
 ) -> Option<Definition> {
     // Lexical reference
     let ident_store = use_site.clone();
-    let ident_ref = match ident_store.cast::<ast::Expr>()? {
-        ast::Expr::Ident(e) => e.span(),
-        ast::Expr::MathIdent(e) => e.span(),
-        ast::Expr::FieldAccess(s) => return find_field_definition(ctx, s),
+    let ident_ref = match ident_store.node().cast::<ast::Expr>()? {
+        ast::Expr::Ident(ident) => ident.span(),
+        ast::Expr::MathIdent(ident) => ident.span(),
+        ast::Expr::FieldAccess(field_access) => return field_definition(ctx, field_access),
         _ => {
-            crate::log_debug_ct!("unsupported kind {kind:?}", kind = use_site.kind());
+            crate::log_debug_ct!("unsupported kind {kind:?}", kind = use_site.node().kind());
             Span::detached()
         }
     };
@@ -106,8 +113,8 @@ fn find_ident_definition(
     DefResolver::new(ctx, source)?.of_span(ident_ref)
 }
 
-fn find_field_definition(ctx: &Arc<SharedContext>, fa: ast::FieldAccess<'_>) -> Option<Definition> {
-    let span = fa.span();
+fn field_definition(ctx: &Arc<SharedContext>, node: ast::FieldAccess) -> Option<Definition> {
+    let span = node.span();
     let ty = ctx.type_of_span(span)?;
     crate::log_debug_ct!("find_field_definition[{span:?}]: {ty:?}");
 
@@ -126,21 +133,22 @@ fn find_field_definition(ctx: &Arc<SharedContext>, fa: ast::FieldAccess<'_>) -> 
             let source = ctx.source_by_id(s.id()?).ok()?;
             DefResolver::new(ctx, &source)?.of_span(s)
         }
-        DocSource::Builtin(..) | DocSource::Ins(..) => None,
+        DocSource::Ins(ins) => value_to_def(ins.val.clone(), || Some(node.field().get().into())),
+        DocSource::Builtin(..) => None,
     }
 }
 
-fn find_bib_definition(
+fn bib_definition(
     ctx: &Arc<SharedContext>,
     introspector: &Introspector,
     key: &str,
 ) -> Option<Definition> {
     let bib_elem = BibliographyElem::find(introspector.track()).ok()?;
-    let Value::Array(arr) = bib_elem.path().clone().into_value() else {
+    let Value::Array(paths) = bib_elem.path().clone().into_value() else {
         return None;
     };
 
-    let bib_paths = arr.into_iter().map(Value::cast).flat_map(|e| e.ok());
+    let bib_paths = paths.into_iter().flat_map(|path| path.cast().ok());
     let bib_info = ctx.analyze_bib(bib_elem.span(), bib_paths)?;
 
     let entry = bib_info.entries.get(key)?;
@@ -151,7 +159,7 @@ fn find_bib_definition(
     Some(Definition::new(decl.into(), None))
 }
 
-fn find_ref_definition(
+fn ref_definition(
     introspector: &Introspector,
     name: &str,
     ref_expr: ast::Expr,
@@ -206,10 +214,10 @@ impl CallConvention {
     /// Get the function pointer of the call.
     pub fn callee(self) -> Func {
         match self {
-            CallConvention::Static(f) => f,
-            CallConvention::Method(_, f) => f,
-            CallConvention::With(f) => f,
-            CallConvention::Where(f) => f,
+            CallConvention::Static(func) => func,
+            CallConvention::Method(_, func) => func,
+            CallConvention::With(func) => func,
+            CallConvention::Where(func) => func,
         }
     }
 }
@@ -220,7 +228,7 @@ pub fn resolve_call_target(ctx: &Arc<SharedContext>, node: &SyntaxNode) -> Optio
         let source = ctx.source_by_id(node.span().id()?).ok()?;
         let def = ctx.def_of_span(&source, None, node.span())?;
         let func_ptr = match def.term.and_then(|val| val.value()) {
-            Some(Value::Func(f)) => Some(f),
+            Some(Value::Func(func)) => Some(func),
             Some(Value::Type(ty)) => ty.constructor().ok(),
             _ => None,
         }?;
@@ -235,8 +243,8 @@ pub fn resolve_call_target(ctx: &Arc<SharedContext>, node: &SyntaxNode) -> Optio
             let field = access.field().get();
             let values = ctx.analyze_expr(target.to_untyped());
             if let Some((this, func_ptr)) = values.into_iter().find_map(|(this, _styles)| {
-                if let Some(Value::Func(f)) = this.ty().scope().get(field) {
-                    return Some((this, f.clone()));
+                if let Some(Value::Func(func)) = this.ty().scope().get(field) {
+                    return Some((this, func.clone()));
                 }
 
                 None
@@ -280,44 +288,25 @@ fn is_same_native_func(x: Option<&Func>, y: &Func) -> bool {
 
 static WITH_FUNC: LazyLock<Option<&'static Func>> = LazyLock::new(|| {
     let fn_ty = Type::of::<Func>();
-    let Some(Value::Func(f)) = fn_ty.scope().get("with") else {
+    let Some(Value::Func(func)) = fn_ty.scope().get("with") else {
         return None;
     };
-    Some(f)
+    Some(func)
 });
 
 static WHERE_FUNC: LazyLock<Option<&'static Func>> = LazyLock::new(|| {
     let fn_ty = Type::of::<Func>();
-    let Some(Value::Func(f)) = fn_ty.scope().get("where") else {
+    let Some(Value::Func(func)) = fn_ty.scope().get("where") else {
         return None;
     };
-    Some(f)
+    Some(func)
 });
 
-fn value_to_def(
-    value: Value,
-    name: impl FnOnce() -> Option<Interned<str>>,
-    name_range: Option<Range<usize>>,
-) -> Option<Definition> {
+fn value_to_def(value: Value, name: impl FnOnce() -> Option<Interned<str>>) -> Option<Definition> {
     let val = Ty::Value(InsTy::new(value.clone()));
-    // DefKind::Closure | DefKind::Func => {
-    // let value = def_fid.and_then(|fid| {
-    //     let def_source = ctx.source_by_id(fid).ok()?;
-    //     let root = LinkedNode::new(def_source.root());
-    //     let def_name = root.find(def?.span()?)?;
-
-    //     log::info!("def_name for function: {def_name:?}");
-    //     let values = ctx.analyze_expr(def_name.get());
-    //     let func = values
-    //         .into_iter()
-    //         .find(|v| matches!(v.0, Value::Func(..)))?;
-    //     log::info!("okay for function: {func:?}");
-    //     Some(func.0)
-    // });
-
     Some(match value {
         Value::Func(func) => {
-            let name = func.name().map(|e| e.into()).or_else(name)?;
+            let name = func.name().map(|name| name.into()).or_else(name)?;
             let mut s = SyntaxNode::leaf(SyntaxKind::Ident, &name);
             s.synthesize(func.span());
 
@@ -325,11 +314,7 @@ fn value_to_def(
             Definition::new(decl.into(), Some(val))
         }
         Value::Module(module) => Definition::new_var(module.name().into(), val),
-        _v => {
-            // todo name_range
-            let _ = name_range;
-            Definition::new_var(name()?, val)
-        }
+        _v => Definition::new_var(name()?, val),
     })
 }
 
@@ -348,9 +333,9 @@ impl DefResolver {
             return None;
         }
 
-        let expr = self.ei.resolves.get(&span).cloned()?;
-        match (&expr.root, &expr.val) {
-            (Some(expr), ty) => self.of_expr(expr, ty.as_ref()),
+        let resolved = self.ei.resolves.get(&span).cloned()?;
+        match (&resolved.root, &resolved.term) {
+            (Some(expr), term) => self.of_expr(expr, term.as_ref()),
             (None, Some(term)) => self.of_term(term),
             (None, None) => None,
         }
@@ -361,7 +346,9 @@ impl DefResolver {
 
         match expr {
             Expr::Decl(decl) => self.of_decl(decl, term),
-            Expr::Ref(r) => self.of_expr(r.root.as_ref()?, r.val.as_ref().or(term)),
+            Expr::Ref(resolved) => {
+                self.of_expr(resolved.root.as_ref()?, resolved.term.as_ref().or(term))
+            }
             _ => None,
         }
     }
@@ -371,7 +358,7 @@ impl DefResolver {
 
         // Get the type of the type node
         let better_def = match term {
-            Ty::Value(v) => value_to_def(v.val.clone(), || None, None),
+            Ty::Value(v) => value_to_def(v.val.clone(), || None),
             // Ty::Var(..) => DeclKind::Var,
             // Ty::Func(..) => DeclKind::Func,
             // Ty::With(..) => DeclKind::Func,

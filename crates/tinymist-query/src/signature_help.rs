@@ -4,8 +4,8 @@ use typst_shim::syntax::LinkedNodeExt;
 use crate::{
     adt::interner::Interned,
     prelude::*,
-    syntax::{get_check_target, get_deref_target, CheckTarget, ParamTarget},
-    LspParamInfo, SemanticRequest,
+    syntax::{classify_context, classify_syntax, ArgClass, SyntaxContext},
+    SemanticRequest,
 };
 
 /// The [`textDocument/signatureHelp`] request is sent from the client to the
@@ -28,18 +28,18 @@ impl SemanticRequest for SignatureHelpRequest {
         let cursor = ctx.to_typst_pos(self.position, &source)? + 1;
 
         let ast_node = LinkedNode::new(source.root()).leaf_at_compat(cursor)?;
-        let CheckTarget::Param {
+        let SyntaxContext::Arg {
             callee,
             target,
             is_set,
             ..
-        } = get_check_target(ast_node)?
+        } = classify_context(ast_node, Some(cursor))?
         else {
             return None;
         };
 
-        let deref_target = get_deref_target(callee, cursor)?;
-        let def = ctx.def_of_syntax(&source, None, deref_target)?;
+        let syntax = classify_syntax(callee, cursor)?;
+        let def = ctx.def_of_syntax(&source, None, syntax)?;
         let sig = ctx.sig_of_def(def.clone())?;
         crate::log_debug_ct!("got signature {sig:?}");
 
@@ -53,19 +53,19 @@ impl SemanticRequest for SignatureHelpRequest {
 
         let mut real_offset = 0;
         let focus_name = OnceCell::new();
-        for (i, (param, ty)) in sig.params().enumerate() {
+        for (idx, (param, ty)) in sig.params().enumerate() {
             if is_set && !param.attrs.settable {
                 continue;
             }
 
             match &target {
-                ParamTarget::Positional { .. } if is_set => {}
-                ParamTarget::Positional { positional, .. } => {
-                    if (*positional) + param_shift == i {
+                ArgClass::Positional { .. } if is_set => {}
+                ArgClass::Positional { positional, .. } => {
+                    if (*positional) + param_shift == idx {
                         active_parameter = Some(real_offset);
                     }
                 }
-                ParamTarget::Named(name) => {
+                ArgClass::Named(name) => {
                     let focus_name = focus_name
                         .get_or_init(|| Interned::new_str(&name.get().clone().into_text()));
                     if focus_name == &param.name {
@@ -89,7 +89,7 @@ impl SemanticRequest for SignatureHelpRequest {
                     .unwrap_or("any")
             ));
 
-            params.push(LspParamInfo {
+            params.push(ParameterInformation {
                 label: lsp_types::ParameterLabel::Simple(format!("{}:", param.name)),
                 documentation: param.docs.as_ref().map(|docs| {
                     Documentation::MarkupContent(MarkupContent {
@@ -106,12 +106,12 @@ impl SemanticRequest for SignatureHelpRequest {
             label.push_str(ret_ty.describe().as_deref().unwrap_or("any"));
         }
 
-        if matches!(target, ParamTarget::Positional { .. }) {
+        if matches!(target, ArgClass::Positional { .. }) {
             active_parameter =
                 active_parameter.map(|x| x.min(sig.primary().pos_size().saturating_sub(1)));
         }
 
-        log::trace!("got signature info {label} {params:?}");
+        crate::log_debug_ct!("got signature info {label} {params:?}");
 
         Some(SignatureHelp {
             signatures: vec![SignatureInformation {
@@ -131,4 +131,25 @@ fn markdown_docs(docs: &str) -> Documentation {
         kind: MarkupKind::Markdown,
         value: docs.to_owned(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::*;
+
+    #[test]
+    fn test() {
+        snapshot_testing("signature_help", &|ctx, path| {
+            let source = ctx.source_by_path(&path).unwrap();
+
+            let request = SignatureHelpRequest {
+                path: path.clone(),
+                position: find_test_position(&source),
+            };
+
+            let result = request.request(ctx);
+            assert_snapshot!(JsonRepr::new_redacted(result, &REDACT_LOC));
+        });
+    }
 }

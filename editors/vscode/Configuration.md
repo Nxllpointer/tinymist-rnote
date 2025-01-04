@@ -24,6 +24,16 @@ Configure the root for absolute paths in typst. Hint: you can set the rootPath t
 
 - **Type**: `string` or `null`
 
+## `tinymist.configureDefaultWordSeparator`
+
+Whether to configure default word separators on startup
+
+- **Type**: `string`
+- **Enum**:
+  - `enable`: Override the default word separators on startup
+  - `disable`: Do not override the default word separators on startup
+- **Default**: `"enable"`
+
 ## `tinymist.semanticTokens`
 
 Enable or disable semantic tokens (LSP syntax highlighting)
@@ -80,7 +90,7 @@ You can pass any arguments as you like, and we will try to follow behaviors of t
 
 ## `tinymist.serverPath`
 
-The extension can use a local tinymist executable instead of the one bundled with the extension. This setting controls the path to the executable.
+The extension can use a local tinymist executable instead of the one bundled with the extension. This setting controls the path to the executable. The string "tinymist" means look up Tinymist in PATH.
 
 - **Type**: `string` or `null`
 

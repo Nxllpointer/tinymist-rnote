@@ -1,4 +1,6 @@
 use core::fmt;
+use std::borrow::Cow;
+use std::str::FromStr;
 use std::sync::{Arc, OnceLock};
 use std::{
     collections::{HashMap, HashSet},
@@ -7,8 +9,9 @@ use std::{
 };
 
 use once_cell::sync::Lazy;
+use reflexo_typst::package::PackageSpec;
 use reflexo_typst::world::EntryState;
-use reflexo_typst::{CompileDriverImpl, EntryManager, EntryReader, ShadowApi};
+use reflexo_typst::{CompileDriverImpl, EntryManager, EntryReader, ShadowApi, TaskInputs};
 use serde_json::{ser::PrettyFormatter, Serializer, Value};
 use tinymist_world::CompileFontArgs;
 use typst::foundations::Bytes;
@@ -19,14 +22,14 @@ pub use insta::assert_snapshot;
 pub use serde::Serialize;
 pub use serde_json::json;
 pub use tinymist_world::{LspUniverse, LspUniverseBuilder};
+use typst::World;
 use typst_shim::syntax::LinkedNodeExt;
 
 use crate::syntax::find_module_level_docs;
 use crate::{
-    analysis::Analysis, prelude::LocalContext, typst_to_lsp, LspPosition, PositionEncoding,
-    VersionedDocument,
+    analysis::Analysis, prelude::LocalContext, LspPosition, PositionEncoding, VersionedDocument,
 };
-use crate::{CompletionFeat, LspWorldExt};
+use crate::{to_lsp_position, CompletionFeat, LspWorldExt};
 
 type CompileDriver<C> = CompileDriverImpl<C, tinymist_world::LspCompilerFeat>;
 
@@ -43,28 +46,28 @@ pub fn snapshot_testing(name: &str, f: &impl Fn(&mut LocalContext, PathBuf)) {
             #[cfg(windows)]
             let contents = contents.replace("\r\n", "\n");
 
-            run_with_sources(&contents, |w, p| {
-                run_with_ctx(w, p, f);
+            run_with_sources(&contents, |world, path| {
+                run_with_ctx(world, path, f);
             });
         });
     });
 }
 
 pub fn run_with_ctx<T>(
-    w: &mut LspUniverse,
-    p: PathBuf,
+    verse: &mut LspUniverse,
+    path: PathBuf,
     f: &impl Fn(&mut LocalContext, PathBuf) -> T,
 ) -> T {
-    let root = w.workspace_root().unwrap();
-    let paths = w
+    let root = verse.workspace_root().unwrap();
+    let paths = verse
         .shadow_paths()
         .into_iter()
-        .map(|p| TypstFileId::new(None, VirtualPath::new(p.strip_prefix(&root).unwrap())))
+        .map(|path| TypstFileId::new(None, VirtualPath::new(path.strip_prefix(&root).unwrap())))
         .collect::<Vec<_>>();
 
-    let w = w.snapshot();
+    let world = verse.snapshot();
 
-    let source = w.source_by_path(&p).ok().unwrap();
+    let source = world.source_by_path(&path).ok().unwrap();
     let docs = find_module_level_docs(&source).unwrap_or_default();
     let properties = get_test_properties(&docs);
     let supports_html = properties
@@ -83,11 +86,17 @@ pub fn run_with_ctx<T>(
         },
         ..Analysis::default()
     })
-    .snapshot(w);
+    .snapshot(world);
 
-    ctx.test_completion_files(Vec::new);
+    ctx.test_package_list(|| {
+        vec![(
+            PackageSpec::from_str("@preview/example:0.1.0").unwrap(),
+            Some("example package (mock).".into()),
+        )]
+    });
+    ctx.test_completion_files(|| paths.clone());
     ctx.test_files(|| paths);
-    f(&mut ctx, p)
+    f(&mut ctx, path)
 }
 
 pub fn get_test_properties(s: &str) -> HashMap<&'_ str, &'_ str> {
@@ -107,16 +116,25 @@ pub fn compile_doc_for_test(
     ctx: &mut LocalContext,
     properties: &HashMap<&str, &str>,
 ) -> Option<VersionedDocument> {
-    let must_compile = properties
-        .get("compile")
-        .map(|v| v.trim() == "true")
-        .unwrap_or(false);
+    let main_id = properties.get("compile").and_then(|v| match v.trim() {
+        "true" => Some(ctx.world.main()),
+        "false" => None,
+        path if path.ends_with(".typ") => {
+            let vp = VirtualPath::new(path);
+            Some(TypstFileId::new(None, vp))
+        }
+        _ => panic!("invalid value for 'compile' property: {v}"),
+    })?;
 
-    if !must_compile {
-        return None;
+    let mut world = Cow::Borrowed(&ctx.world);
+    if main_id != ctx.world.main() {
+        world = Cow::Owned(world.task(TaskInputs {
+            entry: Some(world.entry_state().select_in_workspace(main_id)),
+            ..Default::default()
+        }));
     }
 
-    let doc = typst::compile(ctx.world()).output.unwrap();
+    let doc = typst::compile(world.as_ref()).output.unwrap();
     Some(VersionedDocument {
         version: 0,
         document: Arc::new(doc),
@@ -131,6 +149,7 @@ pub fn run_with_sources<T>(source: &str, f: impl FnOnce(&mut LspUniverse, PathBu
     };
     let mut world = LspUniverseBuilder::build(
         EntryState::new_rooted(root.as_path().into(), None),
+        Default::default(),
         Arc::new(
             LspUniverseBuilder::resolve_fonts(CompileFontArgs {
                 ignore_system_fonts: true,
@@ -138,14 +157,13 @@ pub fn run_with_sources<T>(source: &str, f: impl FnOnce(&mut LspUniverse, PathBu
             })
             .unwrap(),
         ),
-        Default::default(),
-        None,
+        LspUniverseBuilder::resolve_package(None, None),
     )
     .unwrap();
     let sources = source.split("-----");
 
     let mut last_pw = None;
-    for (i, source) in sources.enumerate() {
+    for (idx, source) in sources.enumerate() {
         // find prelude
         let mut source = source.trim_start();
         let mut path = None;
@@ -160,7 +178,7 @@ pub fn run_with_sources<T>(source: &str, f: impl FnOnce(&mut LspUniverse, PathBu
             }
         };
 
-        let path = path.unwrap_or_else(|| format!("/s{i}.typ"));
+        let path = path.unwrap_or_else(|| format!("/s{idx}.typ"));
 
         let pw = root.join(Path::new(&path));
         world
@@ -288,8 +306,8 @@ pub fn find_test_position_(s: &Source, offset: usize) -> LspPosition {
         if match_ident {
             match n.kind() {
                 SyntaxKind::Closure => {
-                    let c = n.cast::<ast::Closure>().unwrap();
-                    if let Some(name) = c.name() {
+                    let closure = n.cast::<ast::Closure>().unwrap();
+                    if let Some(name) = closure.name() {
                         if let Some(m) = n.find(name.span()) {
                             n = m;
                             break 'match_loop;
@@ -297,8 +315,8 @@ pub fn find_test_position_(s: &Source, offset: usize) -> LspPosition {
                     }
                 }
                 SyntaxKind::LetBinding => {
-                    let c = n.cast::<ast::LetBinding>().unwrap();
-                    if let Some(name) = c.kind().bindings().first() {
+                    let let_binding = n.cast::<ast::LetBinding>().unwrap();
+                    if let Some(name) = let_binding.kind().bindings().first() {
                         if let Some(m) = n.find(name.span()) {
                             n = m;
                             break 'match_loop;
@@ -311,7 +329,7 @@ pub fn find_test_position_(s: &Source, offset: usize) -> LspPosition {
         break;
     }
 
-    typst_to_lsp::offset_to_position(n.offset() + offset, PositionEncoding::Utf16, s)
+    to_lsp_position(n.offset() + offset, PositionEncoding::Utf16, s)
 }
 
 // pub static REDACT_URI: Lazy<RedactFields> = Lazy::new(||
@@ -378,37 +396,37 @@ fn pos(v: &Value) -> String {
 }
 
 impl Redact for RedactFields {
-    fn redact(&self, v: Value) -> Value {
-        match v {
-            Value::Object(mut m) => {
-                for (_, v) in m.iter_mut() {
-                    *v = self.redact(v.clone());
+    fn redact(&self, json_val: Value) -> Value {
+        match json_val {
+            Value::Object(mut map) => {
+                for (_, val) in map.iter_mut() {
+                    *val = self.redact(val.clone());
                 }
-                for k in self.0.iter().copied() {
-                    let Some(t) = m.remove(k) else {
+                for key in self.0.iter().copied() {
+                    let Some(t) = map.remove(key) else {
                         continue;
                     };
 
-                    match k {
+                    match key {
                         "changes" => {
                             let obj = t.as_object().unwrap();
-                            m.insert(
-                                k.to_owned(),
+                            map.insert(
+                                key.to_owned(),
                                 Value::Object(
                                     obj.iter().map(|(k, v)| (file_name(k), v.clone())).collect(),
                                 ),
                             );
                         }
                         "uri" | "oldUri" | "newUri" | "targetUri" => {
-                            m.insert(k.to_owned(), file_name(t.as_str().unwrap()).into());
+                            map.insert(key.to_owned(), file_name(t.as_str().unwrap()).into());
                         }
                         "range"
                         | "selectionRange"
                         | "originSelectionRange"
                         | "targetRange"
                         | "targetSelectionRange" => {
-                            m.insert(
-                                k.to_owned(),
+                            map.insert(
+                                key.to_owned(),
                                 format!("{}:{}", pos(&t["start"]), pos(&t["end"])).into(),
                             );
                         }
@@ -422,27 +440,27 @@ impl Redact for RedactFields {
                                 "data:image-hash/svg+xml;base64,redacted"
                             });
 
-                            m.insert(k.to_owned(), res.into());
+                            map.insert(key.to_owned(), res.into());
                         }
                         _ => {}
                     }
                 }
-                Value::Object(m)
+                Value::Object(map)
             }
-            Value::Array(mut a) => {
-                for v in a.iter_mut() {
-                    *v = self.redact(v.clone());
+            Value::Array(mut arr) => {
+                for elem in arr.iter_mut() {
+                    *elem = self.redact(elem.clone());
                 }
-                Value::Array(a)
+                Value::Array(arr)
             }
-            Value::String(s) => Value::String(s),
-            v => v,
+            Value::String(content) => Value::String(content),
+            json_val => json_val,
         }
     }
 }
 
-fn file_name(k: &str) -> String {
-    let name = Path::new(k).file_name().unwrap();
+fn file_name(path: &str) -> String {
+    let name = Path::new(path).file_name().unwrap();
     name.to_str().unwrap().to_owned()
 }
 

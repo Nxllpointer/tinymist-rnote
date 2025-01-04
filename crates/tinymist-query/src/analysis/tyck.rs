@@ -6,8 +6,8 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use tinymist_derive::BindTyCtx;
 
 use super::{
-    prelude::*, BuiltinTy, DynTypeBounds, FlowVarKind, SharedContext, TyCtxMut, TypeScheme,
-    TypeVar, TypeVarBounds,
+    prelude::*, BuiltinTy, DynTypeBounds, FlowVarKind, SharedContext, TyCtxMut, TypeInfo, TypeVar,
+    TypeVarBounds,
 };
 use crate::{
     syntax::{Decl, DeclExpr, Expr, ExprInfo, UnaryOp},
@@ -26,7 +26,7 @@ pub(crate) use select::*;
 
 #[derive(Default)]
 pub struct TypeEnv {
-    visiting: FxHashMap<TypstFileId, Arc<TypeScheme>>,
+    visiting: FxHashMap<TypstFileId, Arc<TypeInfo>>,
     exprs: FxHashMap<TypstFileId, Option<Arc<ExprInfo>>>,
 }
 
@@ -35,13 +35,13 @@ pub(crate) fn type_check(
     ctx: Arc<SharedContext>,
     ei: Arc<ExprInfo>,
     env: &mut TypeEnv,
-) -> Arc<TypeScheme> {
-    let mut info = TypeScheme::default();
+) -> Arc<TypeInfo> {
+    let mut info = TypeInfo::default();
     info.valid = true;
     info.fid = Some(ei.fid);
     info.revision = ei.revision;
 
-    env.visiting.insert(ei.fid, Arc::new(TypeScheme::default()));
+    env.visiting.insert(ei.fid, Arc::new(TypeInfo::default()));
 
     // Retrieve expression information for the source.
     let root = ei.root.clone();
@@ -86,7 +86,7 @@ pub(crate) struct TypeChecker<'a> {
     ctx: Arc<SharedContext>,
     ei: Arc<ExprInfo>,
 
-    info: TypeScheme,
+    info: TypeInfo,
     module_exports: FxHashMap<(TypstFileId, Interned<str>), OnceLock<Option<Ty>>>,
 
     call_cache: FxHashSet<CallCacheDesc>,
@@ -105,7 +105,7 @@ impl TyCtx for TypeChecker<'_> {
 }
 
 impl TyCtxMut for TypeChecker<'_> {
-    type Snap = <TypeScheme as TyCtxMut>::Snap;
+    type Snap = <TypeInfo as TyCtxMut>::Snap;
 
     fn start_scope(&mut self) -> Self::Snap {
         self.info.start_scope()
@@ -127,9 +127,9 @@ impl TyCtxMut for TypeChecker<'_> {
         self.ctx.type_of_value(val)
     }
 
-    fn check_module_item(&mut self, fid: TypstFileId, k: &StrRef) -> Option<Ty> {
+    fn check_module_item(&mut self, fid: TypstFileId, name: &StrRef) -> Option<Ty> {
         self.module_exports
-            .entry((fid, k.clone()))
+            .entry((fid, name.clone()))
             .or_default()
             .clone()
             .get_or_init(|| {
@@ -140,15 +140,15 @@ impl TyCtxMut for TypeChecker<'_> {
                     .or_insert_with(|| self.ctx.expr_stage_by_id(fid))
                     .clone()?;
 
-                Some(self.check(ei.exports.get(k)?))
+                Some(self.check(ei.exports.get(name)?))
             })
             .clone()
     }
 }
 
 impl TypeChecker<'_> {
-    fn check(&mut self, root: &Expr) -> Ty {
-        self.check_syntax(root).unwrap_or(Ty::undef())
+    fn check(&mut self, expr: &Expr) -> Ty {
+        self.check_syntax(expr).unwrap_or(Ty::undef())
     }
 
     fn copy_doc_vars(
@@ -221,12 +221,12 @@ impl TypeChecker<'_> {
             //     self.info.witness_at_least(s, w.clone());
             // }
 
-            TypeScheme::witness_(s, Ty::Var(var.clone()), &mut self.info.mapping);
+            TypeInfo::witness_(s, Ty::Var(var.clone()), &mut self.info.mapping);
         }
         var
     }
 
-    fn constrain_call(
+    fn constrain_sig_inputs(
         &mut self,
         sig: &Interned<SigTy>,
         args: &Interned<SigTy>,
@@ -300,14 +300,14 @@ impl TypeChecker<'_> {
                     }
                 }
             }
-            (Ty::Union(v), rhs) => {
-                for e in v.iter() {
-                    self.constrain(e, rhs);
+            (Ty::Union(types), rhs) => {
+                for ty in types.iter() {
+                    self.constrain(ty, rhs);
                 }
             }
-            (lhs, Ty::Union(v)) => {
-                for e in v.iter() {
-                    self.constrain(lhs, e);
+            (lhs, Ty::Union(types)) => {
+                for ty in types.iter() {
+                    self.constrain(lhs, ty);
                 }
             }
             (lhs, Ty::Builtin(BuiltinTy::Stroke)) => {
@@ -391,9 +391,13 @@ impl TypeChecker<'_> {
                 );
                 self.constrain(lhs, &rhs.lhs);
             }
+            (Ty::Func(lhs), Ty::Func(rhs)) => {
+                crate::log_debug_ct!("constrain func {lhs:?} ⪯ {rhs:?}");
+                self.constrain_sig_inputs(lhs, rhs, None);
+            }
             (Ty::Value(lhs), rhs) => {
                 crate::log_debug_ct!("constrain value {lhs:?} ⪯ {rhs:?}");
-                let _ = TypeScheme::witness_at_most;
+                let _ = TypeInfo::witness_at_most;
                 // if !lhs.1.is_detached() {
                 //     self.info.witness_at_most(lhs.1, rhs.clone());
                 // }
@@ -510,16 +514,16 @@ impl TypeChecker<'_> {
         }
     }
 
-    fn weaken_constraint(&self, c: &Ty, kind: &FlowVarKind) -> Ty {
+    fn weaken_constraint(&self, term: &Ty, kind: &FlowVarKind) -> Ty {
         if matches!(kind, FlowVarKind::Strong(_)) {
-            return c.clone();
+            return term.clone();
         }
 
-        if let Ty::Value(v) = c {
-            return BuiltinTy::from_value(&v.val);
+        if let Ty::Value(ins_ty) = term {
+            return BuiltinTy::from_value(&ins_ty.val);
         }
 
-        c.clone()
+        term.clone()
     }
 }
 
@@ -557,42 +561,44 @@ impl Joiner {
             (Ty::Builtin(BuiltinTy::Space | BuiltinTy::None), _) => {}
             (Ty::Builtin(BuiltinTy::Clause | BuiltinTy::FlowNone), _) => {}
             (Ty::Any, _) | (_, Ty::Any) => {}
-            (Ty::Var(v), _) => self.possibles.push(Ty::Var(v)),
+            (Ty::Var(var), _) => self.possibles.push(Ty::Var(var)),
             // todo: check possibles
-            (Ty::Array(e), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Array(e),
+            (Ty::Array(arr), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Array(arr),
             (Ty::Array(..), _) => self.definite = Ty::undef(),
-            (Ty::Tuple(e), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Tuple(e),
+            (Ty::Tuple(elems), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Tuple(elems),
             (Ty::Tuple(..), _) => self.definite = Ty::undef(),
             // todo: mystery flow none
             // todo: possible some style (auto)
-            (Ty::Builtin(b), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Builtin(b),
+            (Ty::Builtin(ty), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Builtin(ty),
             (Ty::Builtin(..), _) => self.definite = Ty::undef(),
             // todo: value join
-            (Ty::Value(v), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Value(v),
+            (Ty::Value(ins_ty), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Value(ins_ty),
             (Ty::Value(..), _) => self.definite = Ty::undef(),
-            (Ty::Func(f), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Func(f),
+            (Ty::Func(func), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Func(func),
             (Ty::Func(..), _) => self.definite = Ty::undef(),
-            (Ty::Dict(w), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Dict(w),
+            (Ty::Dict(dict), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Dict(dict),
             (Ty::Dict(..), _) => self.definite = Ty::undef(),
-            (Ty::With(w), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::With(w),
+            (Ty::With(with), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::With(with),
             (Ty::With(..), _) => self.definite = Ty::undef(),
-            (Ty::Args(w), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Args(w),
+            (Ty::Args(args), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Args(args),
             (Ty::Args(..), _) => self.definite = Ty::undef(),
-            (Ty::Pattern(w), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Pattern(w),
+            (Ty::Pattern(pat), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Pattern(pat),
             (Ty::Pattern(..), _) => self.definite = Ty::undef(),
-            (Ty::Select(w), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Select(w),
+            (Ty::Select(sel), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Select(sel),
             (Ty::Select(..), _) => self.definite = Ty::undef(),
-            (Ty::Unary(w), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Unary(w),
+            (Ty::Unary(unary), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Unary(unary),
             (Ty::Unary(..), _) => self.definite = Ty::undef(),
-            (Ty::Binary(w), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Binary(w),
+            (Ty::Binary(binary), Ty::Builtin(BuiltinTy::None)) => {
+                self.definite = Ty::Binary(binary)
+            }
             (Ty::Binary(..), _) => self.definite = Ty::undef(),
-            (Ty::If(w), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::If(w),
+            (Ty::If(if_ty), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::If(if_ty),
             (Ty::If(..), _) => self.definite = Ty::undef(),
-            (Ty::Union(w), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Union(w),
+            (Ty::Union(types), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Union(types),
             (Ty::Union(..), _) => self.definite = Ty::undef(),
-            (Ty::Let(w), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Let(w),
+            (Ty::Let(bounds), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Let(bounds),
             (Ty::Let(..), _) => self.definite = Ty::undef(),
-            (Ty::Param(w), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Param(w),
+            (Ty::Param(param), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Param(param),
             (Ty::Param(..), _) => self.definite = Ty::undef(),
             (Ty::Boolean(b), Ty::Builtin(BuiltinTy::None)) => self.definite = Ty::Boolean(b),
             (Ty::Boolean(..), _) => self.definite = Ty::undef(),

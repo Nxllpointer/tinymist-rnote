@@ -5,7 +5,7 @@ use typst::syntax::Span;
 use crate::{
     analysis::{Definition, SearchCtx},
     prelude::*,
-    syntax::{get_index_info, DerefTarget, RefExpr},
+    syntax::{get_index_info, RefExpr, SyntaxClass},
     ty::Interned,
 };
 
@@ -31,9 +31,9 @@ impl StatefulRequest for ReferencesRequest {
         doc: Option<VersionedDocument>,
     ) -> Option<Self::Response> {
         let source = ctx.source_by_path(&self.path).ok()?;
-        let deref_target = ctx.deref_syntax_at(&source, self.position, 1)?;
+        let syntax = ctx.classify_pos(&source, self.position, 1)?;
 
-        let locations = find_references(ctx, &source, doc.as_ref(), deref_target)?;
+        let locations = find_references(ctx, &source, doc.as_ref(), syntax)?;
 
         crate::log_debug_ct!("references: {locations:?}");
         Some(locations)
@@ -44,17 +44,17 @@ pub(crate) fn find_references(
     ctx: &mut LocalContext,
     source: &Source,
     doc: Option<&VersionedDocument>,
-    target: DerefTarget<'_>,
+    syntax: SyntaxClass<'_>,
 ) -> Option<Vec<LspLocation>> {
-    let finding_label = match target {
-        DerefTarget::VarAccess(..) | DerefTarget::Callee(..) => false,
-        DerefTarget::Label(..) | DerefTarget::Ref(..) => true,
-        DerefTarget::ImportPath(..) | DerefTarget::IncludePath(..) | DerefTarget::Normal(..) => {
+    let finding_label = match syntax {
+        SyntaxClass::VarAccess(..) | SyntaxClass::Callee(..) => false,
+        SyntaxClass::Label { .. } | SyntaxClass::Ref(..) => true,
+        SyntaxClass::ImportPath(..) | SyntaxClass::IncludePath(..) | SyntaxClass::Normal(..) => {
             return None;
         }
     };
 
-    let def = ctx.def_of_syntax(source, doc, target)?;
+    let def = ctx.def_of_syntax(source, doc, syntax)?;
 
     let worker = ReferencesWorker {
         ctx: ctx.fork_for_search(),
@@ -139,19 +139,19 @@ impl ReferencesWorker<'_> {
 
     fn push_idents<'b>(
         &mut self,
-        s: &Source,
-        u: &Url,
+        src: &Source,
+        url: &Url,
         idents: impl Iterator<Item = (&'b Span, &'b Interned<RefExpr>)>,
     ) {
-        self.push_ranges(s, u, idents.map(|e| e.0));
+        self.push_ranges(src, url, idents.map(|(span, _)| span));
     }
 
-    fn push_ranges<'b>(&mut self, s: &Source, u: &Url, rs: impl Iterator<Item = &'b Span>) {
-        self.references.extend(rs.filter_map(|span| {
+    fn push_ranges<'b>(&mut self, src: &Source, url: &Url, spans: impl Iterator<Item = &'b Span>) {
+        self.references.extend(spans.filter_map(|span| {
             // todo: this is not necessary a name span
-            let range = self.ctx.ctx.to_lsp_range(s.range(*span)?, s);
+            let range = self.ctx.ctx.to_lsp_range(src.range(*span)?, src);
             Some(LspLocation {
-                uri: u.clone(),
+                uri: url.clone(),
                 range,
             })
         }));
@@ -200,15 +200,15 @@ mod tests {
             let result = request.request(ctx, doc);
             let mut result = result.map(|v| {
                 v.into_iter()
-                    .map(|l| {
-                        let fp = unix_slash(&url_to_path(l.uri));
+                    .map(|loc| {
+                        let fp = unix_slash(&url_to_path(loc.uri));
                         let fp = fp.strip_prefix("C:").unwrap_or(&fp);
                         format!(
                             "{fp}@{}:{}:{}:{}",
-                            l.range.start.line,
-                            l.range.start.character,
-                            l.range.end.line,
-                            l.range.end.character
+                            loc.range.start.line,
+                            loc.range.start.character,
+                            loc.range.end.line,
+                            loc.range.end.character
                         )
                     })
                     .collect::<Vec<_>>()

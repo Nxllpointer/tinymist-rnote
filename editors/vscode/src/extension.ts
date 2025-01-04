@@ -6,36 +6,27 @@ import {
   ViewColumn,
   Uri,
   TextEditor,
-  ExtensionMode,
 } from "vscode";
 import * as vscode from "vscode";
 import * as path from "path";
 
-import { LanguageClient } from "vscode-languageclient/node";
 import { loadTinymistConfig } from "./config";
-import {
-  EditorToolName,
-  SymbolViewProvider as SymbolViewProvider,
-  editorTool,
-  getUserPackageData,
-} from "./editor-tools";
-import { triggerStatusBar, wordCountItemProcess } from "./ui-extends";
-import { setIsTinymist as previewSetIsTinymist } from "./features/preview-compat";
-import {
-  previewActivate,
-  previewDeactivate,
-  previewPreload,
-  previewProcessOutline,
-} from "./features/preview";
+import { triggerStatusBar } from "./ui-extends";
 import { commandCreateLocalPackage, commandOpenLocalPackage } from "./package-manager";
-import { activeTypstEditor, DisposeList, getSensibleTextEditorColumn } from "./util";
+import { activeTypstEditor } from "./util";
 import { tinymist } from "./lsp";
-import { taskActivate } from "./features/tasks";
 import { onEnterHandler } from "./lsp.on-enter";
 import { extensionState } from "./state";
+
+import { getUserPackageData } from "./features/tool";
+import { SymbolViewProvider } from "./features/tool.symbol-view";
+import { setIsTinymist as previewSetIsTinymist } from "./features/preview-compat";
+import { previewActivate, previewDeactivate, previewPreload } from "./features/preview";
+import { taskActivate } from "./features/tasks";
 import { devKitFeatureActivate } from "./features/dev-kit";
 import { labelFeatureActivate } from "./features/label";
 import { packageFeatureActivate } from "./features/package";
+import { toolFeatureActivate } from "./features/tool";
 import { dragAndDropActivate } from "./features/drag-and-drop";
 
 export async function activate(context: ExtensionContext): Promise<void> {
@@ -78,10 +69,28 @@ export async function doActivate(context: ExtensionContext): Promise<void> {
   config.supportHtmlInMarkdown = true;
   // Sets features
   extensionState.features.preview = config.previewFeature === "enable";
+  extensionState.features.wordSeparator = config.configureDefaultWordSeparator !== "disable";
   extensionState.features.devKit = isDevMode || config.devKit === "enable";
   extensionState.features.dragAndDrop = config.dragAndDrop === "enable";
   extensionState.features.onEnter = !!config.onEnterEvent;
   extensionState.features.renderDocs = config.renderDocs === "enable";
+
+  // Configures advanced editor settings to affect the host process
+  let configWordSeparators = async () => {
+    const wordSeparators = "`~!@#$%^&*()=+[{]}\\|;:'\",.<>/?";
+    const config1 = vscode.workspace.getConfiguration("", { languageId: "typst" });
+    await config1.update("editor.wordSeparators", wordSeparators, true, true);
+    const config2 = vscode.workspace.getConfiguration("", { languageId: "typst-code" });
+    await config2.update("editor.wordSeparators", wordSeparators, true, true);
+  };
+  // Runs configuration asynchronously to avoid blocking the activation
+  if (extensionState.features.wordSeparator) {
+    configWordSeparators().catch((e) =>
+      console.error("cannot change editor.wordSeparators for typst", e),
+    );
+  } else {
+    // console.log("skip configuring word separator on startup");
+  }
 
   // Configures advanced language configuration
   tinymist.configureLanguage(config["typingContinueCommentsOnNewline"]);
@@ -100,6 +109,7 @@ export async function doActivate(context: ExtensionContext): Promise<void> {
   // Activates features
   labelFeatureActivate(context);
   packageFeatureActivate(context);
+  toolFeatureActivate(context);
   if (extensionState.features.dragAndDrop) {
     dragAndDropActivate(context);
   }
@@ -240,10 +250,6 @@ async function languageActivate(context: ExtensionContext) {
     }),
   );
 
-  const editorToolCommand = (tool: EditorToolName) => async () => {
-    await editorTool(context, tool);
-  };
-
   const initTemplateCommand =
     (inPlace: boolean) =>
     (...args: string[]) =>
@@ -264,7 +270,7 @@ async function languageActivate(context: ExtensionContext) {
       await doActivate(context);
     }),
     commands.registerCommand("tinymist.runCodeLens", commandRunCodeLens),
-    commands.registerCommand("tinymist.showLog", tinymist.showLog),
+    commands.registerCommand("tinymist.showLog", () => tinymist.showLog()),
     commands.registerCommand("tinymist.copyAnsiHighlight", commandCopyAnsiHighlight),
 
     commands.registerCommand("tinymist.pinMainToCurrent", () => commandPinMain(true)),
@@ -274,11 +280,6 @@ async function languageActivate(context: ExtensionContext) {
 
     commands.registerCommand("tinymist.initTemplate", initTemplateCommand(false)),
     commands.registerCommand("tinymist.initTemplateInPlace", initTemplateCommand(true)),
-
-    commands.registerCommand("tinymist.showTemplateGallery", editorToolCommand("template-gallery")),
-    commands.registerCommand("tinymist.showSummary", editorToolCommand("summary")),
-    commands.registerCommand("tinymist.showSymbolView", editorToolCommand("symbol-view")),
-    commands.registerCommand("tinymist.profileCurrentFile", editorToolCommand("tracing")),
 
     commands.registerCommand("tinymist.createLocalPackage", commandCreateLocalPackage),
     commands.registerCommand("tinymist.openLocalPackage", commandOpenLocalPackage),
@@ -426,28 +427,6 @@ async function commandShow(kind: "Pdf" | "Svg" | "Png", extraOpts?: any): Promis
       break;
     }
   }
-}
-
-export interface PreviewResult {
-  staticServerPort?: number;
-  staticServerAddr?: string;
-  dataPlanePort?: number;
-  isPrimary?: boolean;
-}
-
-export async function commandStartPreview(previewArgs: string[]): Promise<PreviewResult> {
-  const res = await tinymist.executeCommand<PreviewResult>(`tinymist.doStartPreview`, [
-    previewArgs,
-  ]);
-  return res || {};
-}
-
-export async function commandKillPreview(taskId: string): Promise<void> {
-  return await tinymist.executeCommand(`tinymist.doKillPreview`, [taskId]);
-}
-
-export async function commandScrollPreview(taskId: string, req: any): Promise<void> {
-  return await tinymist.executeCommand(`tinymist.scrollPreview`, [taskId, req]);
 }
 
 async function commandClearCache(): Promise<void> {

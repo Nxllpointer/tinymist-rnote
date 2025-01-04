@@ -16,6 +16,7 @@ use clap_complete::generate;
 use futures::future::MaybeDone;
 use lsp_server::RequestId;
 use once_cell::sync::Lazy;
+use reflexo::ImmutPath;
 use reflexo_typst::{package::PackageSpec, TaskInputs, TypstDict};
 use serde_json::Value as JsonValue;
 use sync_lsp::{
@@ -24,7 +25,7 @@ use sync_lsp::{
     LspBuilder, LspClientRoot, LspResult,
 };
 use tinymist::{CompileConfig, Config, LanguageState, RegularInit, SuperInit, UserActionTask};
-use tinymist_query::package::PackageInfo;
+use tinymist_query::{package::PackageInfo, EntryResolver};
 use typst::foundations::IntoValue;
 use typst_shim::utils::LazyHash;
 
@@ -162,10 +163,13 @@ pub fn trace_lsp_main(args: TraceLspArgs) -> anyhow::Result<()> {
     with_stdio_transport(args.mirror.clone(), |conn| {
         let client_root = LspClientRoot::new(RUNTIMES.tokio_runtime.handle().clone(), conn.sender);
         let client = client_root.weak();
-
+        let roots = vec![ImmutPath::from(root_path)];
         let config = Config {
             compile: CompileConfig {
-                roots: vec![root_path],
+                entry_resolver: EntryResolver {
+                    roots,
+                    ..Default::default()
+                },
                 font_opts: args.compile.font,
                 ..CompileConfig::default()
             },
@@ -204,9 +208,7 @@ pub fn trace_lsp_main(args: TraceLspArgs) -> anyhow::Result<()> {
 
         let state = service.state_mut().unwrap();
 
-        let entry = state
-            .compile_config()
-            .determine_entry(Some(input.as_path().into()));
+        let entry = state.entry_resolver().resolve(Some(input.as_path().into()));
 
         let snap = state.primary().snapshot().unwrap();
 

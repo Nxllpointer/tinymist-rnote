@@ -82,7 +82,7 @@ pub(crate) fn compute_docstring(
     let checker = DocsChecker {
         fid,
         ctx,
-        vars: HashMap::new(),
+        var_bounds: HashMap::new(),
         globals: HashMap::default(),
         locals: SnapshotMap::default(),
         next_id: 0,
@@ -98,10 +98,13 @@ pub(crate) fn compute_docstring(
 struct DocsChecker<'a> {
     fid: TypstFileId,
     ctx: &'a Arc<SharedContext>,
-    /// The typing on definitions
-    vars: HashMap<DeclExpr, TypeVarBounds>,
+    /// The bounds of type variables
+    var_bounds: HashMap<DeclExpr, TypeVarBounds>,
+    /// Global name bindings
     globals: HashMap<EcoString, Option<Ty>>,
+    /// Local name bindings
     locals: SnapshotMap<EcoString, Ty>,
+    /// Next generated variable id
     next_id: u32,
 }
 
@@ -114,8 +117,8 @@ impl DocsChecker<'_> {
             convert_docs(self.ctx, &docs).and_then(|converted| identify_pat_docs(&converted));
 
         let converted = match Self::fallback_docs(converted, &docs) {
-            Ok(c) => c,
-            Err(e) => return Some(e),
+            Ok(docs) => docs,
+            Err(err) => return Some(err),
         };
 
         let module = self.ctx.module_by_str(docs);
@@ -138,7 +141,7 @@ impl DocsChecker<'_> {
 
         Some(DocString {
             docs: Some(self.ctx.remove_html(converted.docs)),
-            var_bounds: self.vars,
+            var_bounds: self.var_bounds,
             vars: params,
             res_ty,
         })
@@ -148,13 +151,13 @@ impl DocsChecker<'_> {
         let converted = convert_docs(self.ctx, &docs).and_then(identify_tidy_module_docs);
 
         let converted = match Self::fallback_docs(converted, &docs) {
-            Ok(c) => c,
-            Err(e) => return Some(e),
+            Ok(docs) => docs,
+            Err(err) => return Some(err),
         };
 
         Some(DocString {
             docs: Some(self.ctx.remove_html(converted.docs)),
-            var_bounds: self.vars,
+            var_bounds: self.var_bounds,
             vars: BTreeMap::new(),
             res_ty: None,
         })
@@ -162,13 +165,13 @@ impl DocsChecker<'_> {
 
     fn fallback_docs<T>(converted: Result<T, EcoString>, docs: &str) -> Result<T, DocString> {
         match converted {
-            Ok(c) => Ok(c),
-            Err(e) => {
-                let e = e.replace("`", "\\`");
+            Ok(converted) => Ok(converted),
+            Err(err) => {
+                let err = err.replace("`", "\\`");
                 let max_consecutive_backticks = docs
                     .chars()
-                    .fold((0, 0), |(max, count), c| {
-                        if c == '`' {
+                    .fold((0, 0), |(max, count), ch| {
+                        if ch == '`' {
                             (max.max(count + 1), count + 1)
                         } else {
                             (max, 0)
@@ -177,7 +180,7 @@ impl DocsChecker<'_> {
                     .0;
                 let backticks = "`".repeat((max_consecutive_backticks + 1).max(3));
                 let fallback_docs = eco_format!(
-                    "```\nfailed to parse docs: {e}\n```\n\n{backticks}typ\n{docs}\n{backticks}\n"
+                    "```\nfailed to parse docs: {err}\n```\n\n{backticks}typ\n{docs}\n{backticks}\n"
                 );
                 Err(DocString {
                     docs: Some(fallback_docs),
@@ -199,20 +202,20 @@ impl DocsChecker<'_> {
         };
         let bounds = TypeVarBounds::new(var, DynTypeBounds::default());
         let var = bounds.as_type();
-        self.vars.insert(encoded, bounds);
+        self.var_bounds.insert(encoded, bounds);
         var
     }
 
-    fn check_type_strings(&mut self, m: &Module, strs: &str) -> Option<Ty> {
-        let mut types = vec![];
-        for name in strs.split(",").map(|e| e.trim()) {
+    fn check_type_strings(&mut self, m: &Module, inputs: &str) -> Option<Ty> {
+        let mut terms = vec![];
+        for name in inputs.split(",").map(|ty| ty.trim()) {
             let Some(ty) = self.check_type_ident(m, name) else {
                 continue;
             };
-            types.push(ty);
+            terms.push(ty);
         }
 
-        Some(Ty::from_types(types.into_iter()))
+        Some(Ty::from_types(terms.into_iter()))
     }
 
     fn check_type_ident(&mut self, m: &Module, name: &str) -> Option<Ty> {
@@ -277,67 +280,70 @@ impl DocsChecker<'_> {
             .or_else(|| self.check_type_annotation(m, name))
     }
 
-    fn check_type_annotation(&mut self, m: &Module, name: &str) -> Option<Ty> {
-        if let Some(v) = self.globals.get(name) {
-            return v.clone();
+    fn check_type_annotation(&mut self, module: &Module, name: &str) -> Option<Ty> {
+        if let Some(term) = self.globals.get(name) {
+            return term.clone();
         }
 
-        let v = m.scope().get(name)?;
+        let val = module.scope().get(name)?;
         crate::log_debug_ct!("check doc type annotation: {name:?}");
-        if let Value::Content(c) = v {
-            let annotated = c.clone().unpack::<typst::text::RawElem>().ok()?;
-            let text = annotated.text().clone().into_value().cast::<Str>().ok()?;
-            let code = typst::syntax::parse_code(&text.as_str().replace('\'', "θ"));
+        if let Value::Content(raw) = val {
+            let annotated = raw.clone().unpack::<typst::text::RawElem>().ok()?;
+            let annotated = annotated.text().clone().into_value().cast::<Str>().ok()?;
+            let code = typst::syntax::parse_code(&annotated.as_str().replace('\'', "θ"));
             let mut exprs = code.cast::<ast::Code>()?.exprs();
-            let ret = self.check_type_expr(m, exprs.next()?);
-            self.globals.insert(name.into(), ret.clone());
-            ret
+            let term = self.check_type_expr(module, exprs.next()?);
+            self.globals.insert(name.into(), term.clone());
+            term
         } else {
             None
         }
     }
 
-    fn check_type_expr(&mut self, m: &Module, s: ast::Expr) -> Option<Ty> {
-        crate::log_debug_ct!("check doc type expr: {s:?}");
-        match s {
-            ast::Expr::Ident(i) => self.check_type_ident(m, i.get().as_str()),
+    fn check_type_expr(&mut self, module: &Module, expr: ast::Expr) -> Option<Ty> {
+        crate::log_debug_ct!("check doc type expr: {expr:?}");
+        match expr {
+            ast::Expr::Ident(ident) => self.check_type_ident(module, ident.get().as_str()),
             ast::Expr::None(_)
             | ast::Expr::Auto(_)
             | ast::Expr::Bool(..)
             | ast::Expr::Int(..)
             | ast::Expr::Float(..)
             | ast::Expr::Numeric(..)
-            | ast::Expr::Str(..) => SharedContext::const_eval(s).map(|v| Ty::Value(InsTy::new(v))),
-            ast::Expr::Binary(b) => {
+            | ast::Expr::Str(..) => {
+                SharedContext::const_eval(expr).map(|v| Ty::Value(InsTy::new(v)))
+            }
+            ast::Expr::Binary(binary) => {
                 let mut components = Vec::with_capacity(2);
-                components.push(self.check_type_expr(m, b.lhs())?);
+                components.push(self.check_type_expr(module, binary.lhs())?);
 
-                let mut expr = b.rhs();
-                while let ast::Expr::Binary(b) = expr {
-                    if b.op() != ast::BinOp::Or {
+                let mut rhs = binary.rhs();
+                while let ast::Expr::Binary(binary) = rhs {
+                    if binary.op() != ast::BinOp::Or {
                         break;
                     }
 
-                    components.push(self.check_type_expr(m, b.lhs())?);
-                    expr = b.rhs();
+                    components.push(self.check_type_expr(module, binary.lhs())?);
+                    rhs = binary.rhs();
                 }
 
-                components.push(self.check_type_expr(m, expr)?);
+                components.push(self.check_type_expr(module, rhs)?);
                 Some(Ty::from_types(components.into_iter()))
             }
-            ast::Expr::FuncCall(c) => match c.callee() {
-                ast::Expr::Ident(i) => {
-                    let name = i.get().as_str();
+            ast::Expr::FuncCall(call) => match call.callee() {
+                ast::Expr::Ident(callee) => {
+                    let name = callee.get().as_str();
                     match name {
                         "array" => Some({
-                            let ast::Arg::Pos(pos) = c.args().items().next()? else {
+                            let ast::Arg::Pos(pos) = call.args().items().next()? else {
                                 return None;
                             };
 
-                            Ty::Array(self.check_type_expr(m, pos)?.into())
+                            Ty::Array(self.check_type_expr(module, pos)?.into())
                         }),
                         "tag" => Some({
-                            let ast::Arg::Pos(ast::Expr::Str(s)) = c.args().items().next()? else {
+                            let ast::Arg::Pos(ast::Expr::Str(s)) = call.args().items().next()?
+                            else {
                                 return None;
                             };
                             let pkg_id = PackageId::try_from(self.fid).ok();
@@ -351,44 +357,53 @@ impl DocsChecker<'_> {
                 }
                 _ => None,
             },
-            ast::Expr::Closure(c) => {
-                crate::log_debug_ct!("check doc closure annotation: {c:?}");
-                let mut pos = vec![];
-                let mut named = BTreeMap::new();
-                let mut rest = None;
+            ast::Expr::Closure(closure) => {
+                crate::log_debug_ct!("check doc closure annotation: {closure:?}");
+                let mut pos_all = vec![];
+                let mut named_all = BTreeMap::new();
+                let mut spread_right = None;
                 let snap = self.locals.snapshot();
 
                 let sig = None.or_else(|| {
-                    for param in c.params().children() {
+                    for param in closure.params().children() {
                         match param {
-                            ast::Param::Pos(ast::Pattern::Normal(ast::Expr::Ident(i))) => {
-                                let name = i.get().clone();
-                                let base_ty = self.generate_var(name.as_str().into());
-                                self.locals.insert(name, base_ty.clone());
-                                pos.push(base_ty);
+                            ast::Param::Pos(ast::Pattern::Normal(ast::Expr::Ident(pos))) => {
+                                let name = pos.get().clone();
+                                let term = self.generate_var(name.as_str().into());
+                                self.locals.insert(name, term.clone());
+                                pos_all.push(term);
                             }
-                            ast::Param::Pos(_) => {
-                                pos.push(Ty::Any);
+                            ast::Param::Pos(_pos) => {
+                                pos_all.push(Ty::Any);
                             }
-                            ast::Param::Named(e) => {
-                                let exp = self.check_type_expr(m, e.expr()).unwrap_or(Ty::Any);
-                                named.insert(e.name().into(), exp);
+                            ast::Param::Named(named) => {
+                                let term = self
+                                    .check_type_expr(module, named.expr())
+                                    .unwrap_or(Ty::Any);
+                                named_all.insert(named.name().into(), term);
                             }
                             // todo: spread left/right
-                            ast::Param::Spread(s) => {
-                                let Some(i) = s.sink_ident() else {
+                            ast::Param::Spread(spread) => {
+                                let Some(sink) = spread.sink_ident() else {
                                     continue;
                                 };
-                                let name = i.get().clone();
-                                let rest_ty = self.generate_var(name.as_str().into());
-                                self.locals.insert(name, rest_ty.clone());
-                                rest = Some(rest_ty);
+                                let sink_name = sink.get().clone();
+                                let rest_term = self.generate_var(sink_name.as_str().into());
+                                self.locals.insert(sink_name, rest_term.clone());
+                                spread_right = Some(rest_term);
                             }
                         }
                     }
 
-                    let body = self.check_type_expr(m, c.body())?;
-                    let sig = SigTy::new(pos.into_iter(), named, None, rest, Some(body)).into();
+                    let body = self.check_type_expr(module, closure.body())?;
+                    let sig = SigTy::new(
+                        pos_all.into_iter(),
+                        named_all,
+                        None,
+                        spread_right,
+                        Some(body),
+                    )
+                    .into();
 
                     Some(Ty::Func(sig))
                 });
@@ -396,8 +411,8 @@ impl DocsChecker<'_> {
                 self.locals.rollback_to(snap);
                 sig
             }
-            ast::Expr::Dict(d) => {
-                crate::log_debug_ct!("check doc dict annotation: {d:?}");
+            ast::Expr::Dict(decl) => {
+                crate::log_debug_ct!("check doc dict annotation: {decl:?}");
                 None
             }
             _ => None,

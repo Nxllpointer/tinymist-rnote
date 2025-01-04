@@ -46,6 +46,60 @@ fn extract_mod_docs_between(
     matcher.collect()
 }
 
+pub enum CommentGroupSignal {
+    Hash,
+    Space,
+    LineComment,
+    BlockComment,
+    BreakGroup,
+}
+
+#[derive(Default)]
+pub struct CommentGroupMatcher {
+    newline_count: u32,
+}
+
+impl CommentGroupMatcher {
+    pub fn process(&mut self, n: &SyntaxNode) -> CommentGroupSignal {
+        match n.kind() {
+            SyntaxKind::Hash => {
+                self.newline_count = 0;
+
+                CommentGroupSignal::Hash
+            }
+            SyntaxKind::Space => {
+                if n.text().contains('\n') {
+                    self.newline_count += 1;
+                }
+                if self.newline_count > 1 {
+                    return CommentGroupSignal::BreakGroup;
+                }
+
+                CommentGroupSignal::Space
+            }
+            SyntaxKind::Parbreak => {
+                self.newline_count = 2;
+                CommentGroupSignal::BreakGroup
+            }
+            SyntaxKind::LineComment => {
+                self.newline_count = 0;
+                CommentGroupSignal::LineComment
+            }
+            SyntaxKind::BlockComment => {
+                self.newline_count = 0;
+                CommentGroupSignal::BlockComment
+            }
+            _ => {
+                self.newline_count = 0;
+                CommentGroupSignal::BreakGroup
+            }
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.newline_count = 0;
+    }
+}
 enum RawComment {
     Line(EcoString),
     Block(EcoString),
@@ -54,45 +108,29 @@ enum RawComment {
 #[derive(Default)]
 pub struct DocCommentMatcher {
     comments: Vec<RawComment>,
-    newline_count: usize,
+    group_matcher: CommentGroupMatcher,
     strict: bool,
 }
 
 impl DocCommentMatcher {
     pub fn process(&mut self, n: &SyntaxNode) -> bool {
-        match n.kind() {
-            SyntaxKind::Hash => {
-                self.newline_count = 0;
-            }
-            SyntaxKind::Space => {
-                if n.text().contains('\n') {
-                    self.newline_count += 1;
-                }
-                if self.newline_count > 1 {
-                    return true;
-                }
-            }
-            SyntaxKind::Parbreak => {
-                self.newline_count = 2;
-                return true;
-            }
-            SyntaxKind::LineComment => {
-                self.newline_count = 0;
+        match self.group_matcher.process(n) {
+            CommentGroupSignal::LineComment => {
                 let text = n.text();
                 if !self.strict || text.starts_with("///") {
                     self.comments.push(RawComment::Line(text.clone()));
                 }
             }
-            SyntaxKind::BlockComment => {
-                self.newline_count = 0;
+            CommentGroupSignal::BlockComment => {
                 let text = n.text();
                 if !self.strict {
                     self.comments.push(RawComment::Block(text.clone()));
                 }
             }
-            _ => {
-                self.newline_count = 0;
+            CommentGroupSignal::BreakGroup => {
+                return true;
             }
+            CommentGroupSignal::Hash | CommentGroupSignal::Space => {}
         }
 
         false
@@ -104,13 +142,13 @@ impl DocCommentMatcher {
             return None;
         }
 
-        let comments = comments.iter().map(|c| match c {
-            RawComment::Line(c) => {
+        let comments = comments.iter().map(|comment| match comment {
+            RawComment::Line(line) => {
                 // strip all slash prefix
-                let text = c.trim_start_matches('/');
+                let text = line.trim_start_matches('/');
                 text
             }
-            RawComment::Block(c) => {
+            RawComment::Block(block) => {
                 fn remove_comment(text: &str) -> Option<&str> {
                     let mut text = text.strip_prefix("/*")?.strip_suffix("*/")?.trim();
                     // trip start star
@@ -120,27 +158,27 @@ impl DocCommentMatcher {
                     Some(text)
                 }
 
-                remove_comment(c).unwrap_or(c.as_str())
+                remove_comment(block).unwrap_or(block.as_str())
             }
         });
         let comments = comments.collect::<Vec<_>>();
 
-        let dedent = comments.iter().fold(usize::MAX, |acc, c| {
-            let indent = c.chars().take_while(|c| c.is_whitespace()).count();
+        let dedent = comments.iter().fold(usize::MAX, |acc, content| {
+            let indent = content.chars().take_while(|ch| ch.is_whitespace()).count();
             acc.min(indent)
         });
 
-        let size_hint = comments.iter().map(|c| c.len()).sum::<usize>();
+        let size_hint = comments.iter().map(|comment| comment.len()).sum::<usize>();
         let mut comments = comments
             .iter()
-            .map(|c| c.chars().skip(dedent).collect::<String>());
+            .map(|comment| comment.chars().skip(dedent).collect::<String>());
 
-        let res = comments.try_fold(String::with_capacity(size_hint), |mut acc, c| {
+        let res = comments.try_fold(String::with_capacity(size_hint), |mut acc, comment| {
             if !acc.is_empty() {
                 acc.push('\n');
             }
 
-            acc.push_str(&c);
+            acc.push_str(&comment);
             Some(acc)
         });
 
@@ -148,8 +186,8 @@ impl DocCommentMatcher {
         res
     }
 
-    pub(crate) fn reset(&mut self) {
+    pub fn reset(&mut self) {
         self.comments.clear();
-        self.newline_count = 0;
+        self.group_matcher.reset();
     }
 }

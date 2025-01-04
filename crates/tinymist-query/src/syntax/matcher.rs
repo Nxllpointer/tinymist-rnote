@@ -1,72 +1,108 @@
+//! Convenient utilities to match syntax structures of code.
+//! - Iterators/Finders to traverse nodes.
+//! - Predicates to check nodes' properties.
+//! - Classifiers to check nodes' syntax.
+//!
+//! ## Classifiers of syntax structures
+//!
+//! A node can have a quadruple to describe its syntax:
+//!
+//! ```text
+//! (InterpretMode, SurroundingSyntax/SyntaxContext, DefClass/SyntaxClass, SyntaxNode)
+//! ```
+//!
+//! Among them, [`InterpretMode`], [`SurroundingSyntax`], and [`SyntaxContext`]
+//! describes outer syntax. [`DefClass`], [`SyntaxClass`] and
+//! [`typst::syntax::SyntaxNode`] describes inner syntax.
+//!
+//! - [`typst::syntax::SyntaxNode`]: Its contextual version is
+//!   [`typst::syntax::LinkedNode`], containing AST information, like inner text
+//!   and [`SyntaxKind`], on the position.
+//! - [`SyntaxClass`]: Provided by [`classify_syntax`], it describes the
+//!   context-free syntax of the node that are more suitable for IDE operations.
+//!   For example, it identifies users' half-typed syntax like half-completed
+//!   labels and dot accesses.
+//! - [`DefClass`]: Provided by [`classify_def`], it describes the definition
+//!   class of the node at the position. The difference between `SyntaxClass`
+//!   and `DefClass` is that the latter matcher will skip the nodes that do not
+//!   define a definition.
+//! - [`SyntaxContext`]: Provided by [`classify_context`], it describes the
+//!   outer syntax of the node that are more suitable for IDE operations. For
+//!   example, it identifies the context of a cursor on the comma in a function
+//!   call.
+//! - [`SurroundingSyntax`]: Provided by [`surrounding_syntax`], it describes
+//!   the surrounding syntax of the node that are more suitable for IDE
+//!   operations. The difference between `SyntaxContext` and `SurroundingSyntax`
+//!   is that the former is more specific and the latter is more general can be
+//!   used for filtering customized snippets.
+//! - [`InterpretMode`]: Provided by [`interpret_mode_at`], it describes the how
+//!   an interpreter should interpret the code at the position.
+//!
+//! Some examples of the quadruple (the cursor is marked by `|`):
+//!
+//! ```text
+//! #(x|);
+//!    ^ SyntaxContext::Paren, SyntaxClass::Normal(SyntaxKind::Ident)
+//! #(x,|);
+//!     ^ SyntaxContext::Element, SyntaxClass::Normal(SyntaxKind::Array)
+//! #f(x,|);
+//!      ^ SyntaxContext::Arg, SyntaxClass::Normal(SyntaxKind::FuncCall)
+//! ```
+//!
+//! ```text
+//! #show raw|: |it => it|
+//!          ^ SurroundingSyntax::Selector
+//!             ^ SurroundingSyntax::ShowTransform
+//!                      ^ SurroundingSyntax::Regular
+//! ```
+
+use reflexo_typst::debug_loc::SourceSpanOffset;
 use serde::{Deserialize, Serialize};
-use typst::foundations::{Func, ParamInfo};
+use typst::syntax::Span;
 
 use crate::prelude::*;
 
-pub fn deref_expr(mut ancestor: LinkedNode) -> Option<LinkedNode> {
-    while !ancestor.is::<ast::Expr>() {
-        ancestor = ancestor.parent()?.clone();
-    }
-    Some(ancestor)
-}
-
-pub fn deref_lvalue(mut node: LinkedNode) -> Option<LinkedNode> {
-    while let Some(e) = node.cast::<ast::Parenthesized>() {
-        node = node.find(e.expr().span())?;
-    }
-    if let Some(e) = node.parent() {
-        if let Some(f) = e.cast::<ast::FieldAccess>() {
-            if node.span() == f.field().span() {
-                return Some(e.clone());
-            }
-        }
-    }
-    Some(node)
-}
-
-pub(crate) fn find_expr_in_import(mut node: LinkedNode) -> Option<LinkedNode> {
-    while let Some(parent) = node.parent() {
-        if matches!(
-            parent.kind(),
-            SyntaxKind::ModuleImport | SyntaxKind::ModuleInclude
-        ) {
-            return Some(node);
-        }
-        node = parent.clone();
-    }
-    None
-}
-
+/// Returns the ancestor iterator of the given node.
 pub fn node_ancestors<'a, 'b>(
     node: &'b LinkedNode<'a>,
 ) -> impl Iterator<Item = &'b LinkedNode<'a>> {
     std::iter::successors(Some(node), |node| node.parent())
 }
 
-pub enum DecenderItem<'a> {
-    Sibling(&'a LinkedNode<'a>),
-    Parent(&'a LinkedNode<'a>, &'a LinkedNode<'a>),
+/// Finds the first ancestor node that is an expression.
+pub fn first_ancestor_expr(node: LinkedNode) -> Option<LinkedNode> {
+    node_ancestors(&node).find(|n| n.is::<ast::Expr>()).cloned()
 }
 
-impl<'a> DecenderItem<'a> {
+/// A node that is an ancestor of the given node or the previous sibling
+/// of some ancestor.
+pub enum PreviousItem<'a> {
+    /// When the iterator is crossing an ancesstor node.
+    Parent(&'a LinkedNode<'a>, &'a LinkedNode<'a>),
+    /// When the iterator is on a sibling node of some ancestor.
+    Sibling(&'a LinkedNode<'a>),
+}
+
+impl<'a> PreviousItem<'a> {
     pub fn node(&self) -> &'a LinkedNode<'a> {
         match self {
-            DecenderItem::Sibling(node) => node,
-            DecenderItem::Parent(node, _) => node,
+            PreviousItem::Sibling(node) => node,
+            PreviousItem::Parent(node, _) => node,
         }
     }
 }
 
-/// Find the decender nodes starting from the given position.
-pub fn node_descenders<T>(
+/// Finds the previous items (in the scope) starting from the given position
+/// inclusively. See [`PreviousItem`] for the possible items.
+pub fn previous_items<T>(
     node: LinkedNode,
-    mut recv: impl FnMut(DecenderItem) -> Option<T>,
+    mut recv: impl FnMut(PreviousItem) -> Option<T>,
 ) -> Option<T> {
     let mut ancestor = Some(node);
     while let Some(node) = &ancestor {
         let mut sibling = Some(node.clone());
         while let Some(node) = &sibling {
-            if let Some(v) = recv(DecenderItem::Sibling(node)) {
+            if let Some(v) = recv(PreviousItem::Sibling(node)) {
                 return Some(v);
             }
 
@@ -74,7 +110,7 @@ pub fn node_descenders<T>(
         }
 
         if let Some(parent) = node.parent() {
-            if let Some(v) = recv(DecenderItem::Parent(parent, node)) {
+            if let Some(v) = recv(PreviousItem::Parent(parent, node)) {
                 return Some(v);
             }
 
@@ -88,37 +124,38 @@ pub fn node_descenders<T>(
     None
 }
 
-pub enum DescentDecl<'a> {
+pub enum PreviousDecl<'a> {
     Ident(ast::Ident<'a>),
     ImportSource(ast::Expr<'a>),
     ImportAll(ast::ModuleImport<'a>),
 }
 
-/// Find the descending decls starting from the given position.
-pub fn descending_decls<T>(
+/// Finds the previous declarations starting from the given position. It checks
+/// [`PreviousItem`] and returns the found declarations.
+pub fn previous_decls<T>(
     node: LinkedNode,
-    mut recv: impl FnMut(DescentDecl) -> Option<T>,
+    mut recv: impl FnMut(PreviousDecl) -> Option<T>,
 ) -> Option<T> {
-    node_descenders(node, |node| {
-        match (&node, node.node().cast::<ast::Expr>()?) {
-            (DecenderItem::Sibling(..), ast::Expr::Let(lb)) => {
+    previous_items(node, |item| {
+        match (&item, item.node().cast::<ast::Expr>()?) {
+            (PreviousItem::Sibling(..), ast::Expr::Let(lb)) => {
                 for ident in lb.kind().bindings() {
-                    if let Some(t) = recv(DescentDecl::Ident(ident)) {
+                    if let Some(t) = recv(PreviousDecl::Ident(ident)) {
                         return Some(t);
                     }
                 }
             }
-            (DecenderItem::Sibling(..), ast::Expr::Import(mi)) => {
+            (PreviousItem::Sibling(..), ast::Expr::Import(import)) => {
                 // import items
-                match mi.imports() {
+                match import.imports() {
                     Some(ast::Imports::Wildcard) => {
-                        if let Some(t) = recv(DescentDecl::ImportAll(mi)) {
+                        if let Some(t) = recv(PreviousDecl::ImportAll(import)) {
                             return Some(t);
                         }
                     }
-                    Some(ast::Imports::Items(e)) => {
-                        for item in e.iter() {
-                            if let Some(t) = recv(DescentDecl::Ident(item.bound_name())) {
+                    Some(ast::Imports::Items(items)) => {
+                        for item in items.iter() {
+                            if let Some(t) = recv(PreviousDecl::Ident(item.bound_name())) {
                                 return Some(t);
                             }
                         }
@@ -127,53 +164,53 @@ pub fn descending_decls<T>(
                 }
 
                 // import it self
-                if let Some(new_name) = mi.new_name() {
-                    if let Some(t) = recv(DescentDecl::Ident(new_name)) {
+                if let Some(new_name) = import.new_name() {
+                    if let Some(t) = recv(PreviousDecl::Ident(new_name)) {
                         return Some(t);
                     }
-                } else if mi.imports().is_none() {
-                    if let Some(t) = recv(DescentDecl::ImportSource(mi.source())) {
+                } else if import.imports().is_none() {
+                    if let Some(t) = recv(PreviousDecl::ImportSource(import.source())) {
                         return Some(t);
                     }
                 }
             }
-            (DecenderItem::Parent(node, child), ast::Expr::For(f)) => {
-                let body = node.find(f.body().span());
+            (PreviousItem::Parent(parent, child), ast::Expr::For(for_expr)) => {
+                let body = parent.find(for_expr.body().span());
                 let in_body = body.is_some_and(|n| n.find(child.span()).is_some());
                 if !in_body {
                     return None;
                 }
 
-                for ident in f.pattern().bindings() {
-                    if let Some(t) = recv(DescentDecl::Ident(ident)) {
+                for ident in for_expr.pattern().bindings() {
+                    if let Some(t) = recv(PreviousDecl::Ident(ident)) {
                         return Some(t);
                     }
                 }
             }
-            (DecenderItem::Parent(node, child), ast::Expr::Closure(c)) => {
-                let body = node.find(c.body().span());
+            (PreviousItem::Parent(parent, child), ast::Expr::Closure(closure)) => {
+                let body = parent.find(closure.body().span());
                 let in_body = body.is_some_and(|n| n.find(child.span()).is_some());
                 if !in_body {
                     return None;
                 }
 
-                for param in c.params().children() {
+                for param in closure.params().children() {
                     match param {
-                        ast::Param::Pos(pattern) => {
-                            for ident in pattern.bindings() {
-                                if let Some(t) = recv(DescentDecl::Ident(ident)) {
+                        ast::Param::Pos(pos) => {
+                            for ident in pos.bindings() {
+                                if let Some(t) = recv(PreviousDecl::Ident(ident)) {
                                     return Some(t);
                                 }
                             }
                         }
-                        ast::Param::Named(n) => {
-                            if let Some(t) = recv(DescentDecl::Ident(n.name())) {
+                        ast::Param::Named(named) => {
+                            if let Some(t) = recv(PreviousDecl::Ident(named.name())) {
                                 return Some(t);
                             }
                         }
-                        ast::Param::Spread(s) => {
-                            if let Some(sink_ident) = s.sink_ident() {
-                                if let Some(t) = recv(DescentDecl::Ident(sink_ident)) {
+                        ast::Param::Spread(spread) => {
+                            if let Some(sink_ident) = spread.sink_ident() {
+                                if let Some(t) = recv(PreviousDecl::Ident(sink_ident)) {
                                     return Some(t);
                                 }
                             }
@@ -187,59 +224,34 @@ pub fn descending_decls<T>(
     })
 }
 
-fn is_mark(sk: SyntaxKind) -> bool {
+/// Whether the node can be recognized as a mark.
+pub fn is_mark(sk: SyntaxKind) -> bool {
     use SyntaxKind::*;
-    matches!(
-        sk,
-        MathAlignPoint
-            | Plus
-            | Minus
-            | Slash
-            | Hat
-            | Dot
-            | Eq
-            | EqEq
-            | ExclEq
-            | Lt
-            | LtEq
-            | Gt
-            | GtEq
-            | PlusEq
-            | HyphEq
-            | StarEq
-            | SlashEq
-            | Dots
-            | Arrow
-            | Not
-            | And
-            | Or
-            | LeftBrace
-            | RightBrace
-            | LeftBracket
-            | RightBracket
-            | LeftParen
-            | RightParen
-            | Comma
-            | Semicolon
-            | Colon
-            | Hash
-    )
+    #[allow(clippy::match_like_matches_macro)]
+    match sk {
+        MathAlignPoint | Plus | Minus | Dot | Dots | Arrow | Not | And | Or => true,
+        Eq | EqEq | ExclEq | Lt | LtEq | Gt | GtEq | PlusEq | HyphEq | StarEq | SlashEq => true,
+        LeftBrace | RightBrace | LeftBracket | RightBracket | LeftParen | RightParen => true,
+        Slash | Hat | Comma | Semicolon | Colon | Hash => true,
+        _ => false,
+    }
 }
 
+/// Whether the node can be recognized as an identifier.
 pub fn is_ident_like(node: &SyntaxNode) -> bool {
-    use SyntaxKind::*;
-    let k = node.kind();
-    matches!(k, Ident | MathIdent | Underscore)
-        || (matches!(k, Error) && can_be_ident(node))
-        || k.is_keyword()
-}
+    fn can_be_ident(node: &SyntaxNode) -> bool {
+        typst::syntax::is_ident(node.text())
+    }
 
-fn can_be_ident(node: &SyntaxNode) -> bool {
-    typst::syntax::is_ident(node.text())
+    use SyntaxKind::*;
+    let kind = node.kind();
+    matches!(kind, Ident | MathIdent | Underscore)
+        || (matches!(kind, Error) && can_be_ident(node))
+        || kind.is_keyword()
 }
 
 /// A mode in which a text document is interpreted.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, strum::EnumIter)]
 #[serde(rename_all = "camelCase")]
 pub enum InterpretMode {
     /// The position is in a comment.
@@ -256,17 +268,43 @@ pub enum InterpretMode {
     Math,
 }
 
-pub(crate) fn interpret_mode_at_kind(k: SyntaxKind) -> Option<InterpretMode> {
+/// Determine the interpretation mode at the given position (context-sensitive).
+pub fn interpret_mode_at(mut leaf: Option<&LinkedNode>) -> InterpretMode {
+    loop {
+        crate::log_debug_ct!("leaf for context: {leaf:?}");
+        if let Some(t) = leaf {
+            if let Some(mode) = interpret_mode_at_kind(t.kind()) {
+                break mode;
+            }
+
+            if !t.kind().is_trivia() && {
+                // Previous leaf is hash
+                t.prev_leaf()
+                    .map_or(false, |n| n.kind() == SyntaxKind::Hash)
+            } {
+                return InterpretMode::Code;
+            }
+
+            leaf = t.parent();
+        } else {
+            break InterpretMode::Markup;
+        }
+    }
+}
+
+/// Determine the interpretation mode at the given kind (context-free).
+pub(crate) fn interpret_mode_at_kind(kind: SyntaxKind) -> Option<InterpretMode> {
     use SyntaxKind::*;
-    Some(match k {
+    Some(match kind {
         LineComment | BlockComment => InterpretMode::Comment,
         Raw => InterpretMode::Raw,
         Str => InterpretMode::String,
         CodeBlock | Code => InterpretMode::Code,
         ContentBlock | Markup => InterpretMode::Markup,
         Equation | Math => InterpretMode::Math,
+        Hash => InterpretMode::Code,
         Label | Text | Ident | FieldAccess | Bool | Int | Float | Numeric | Space | Linebreak
-        | Parbreak | Escape | Shorthand | SmartQuote | RawLang | RawDelim | RawTrimmed | Hash
+        | Parbreak | Escape | Shorthand | SmartQuote | RawLang | RawDelim | RawTrimmed
         | LeftBrace | RightBrace | LeftBracket | RightBracket | LeftParen | RightParen | Comma
         | Semicolon | Colon | Star | Underscore | Dollar | Plus | Minus | Slash | Hat | Prime
         | Dot | Eq | EqEq | ExclEq | Lt | LtEq | Gt | GtEq | PlusEq | HyphEq | StarEq | SlashEq
@@ -286,133 +324,28 @@ pub(crate) fn interpret_mode_at_kind(k: SyntaxKind) -> Option<InterpretMode> {
     })
 }
 
-pub(crate) fn interpret_mode_at(mut leaf: Option<&LinkedNode>) -> InterpretMode {
-    loop {
-        crate::log_debug_ct!("leaf for context: {leaf:?}");
-        if let Some(t) = leaf {
-            if let Some(mode) = interpret_mode_at_kind(t.kind()) {
-                break mode;
-            }
-
-            leaf = t.parent();
-        } else {
-            break InterpretMode::Markup;
-        }
-    }
-}
-
+/// Classes of def items that can be operated on by IDE functionality.
 #[derive(Debug, Clone)]
-pub enum DerefTarget<'a> {
-    Label(LinkedNode<'a>),
-    Ref(LinkedNode<'a>),
-    VarAccess(LinkedNode<'a>),
-    Callee(LinkedNode<'a>),
-    ImportPath(LinkedNode<'a>),
-    IncludePath(LinkedNode<'a>),
-    Normal(SyntaxKind, LinkedNode<'a>),
-}
-
-impl<'a> DerefTarget<'a> {
-    pub fn node(&self) -> &LinkedNode<'a> {
-        match self {
-            DerefTarget::Label(node) => node,
-            DerefTarget::Ref(node) => node,
-            DerefTarget::VarAccess(node) => node,
-            DerefTarget::Callee(node) => node,
-            DerefTarget::ImportPath(node) => node,
-            DerefTarget::IncludePath(node) => node,
-            DerefTarget::Normal(_, node) => node,
-        }
-    }
-}
-
-pub fn get_deref_target(node: LinkedNode, cursor: usize) -> Option<DerefTarget<'_>> {
-    /// Skips trivia nodes that are on the same line as the cursor.
-    fn can_skip_trivia(node: &LinkedNode, cursor: usize) -> bool {
-        // A non-trivia node is our target so we stop at it.
-        if !node.kind().is_trivia() || !node.parent_kind().is_some_and(possible_in_code_trivia) {
-            return false;
-        }
-
-        // Get the trivia text before the cursor.
-        let pref = node.text().as_bytes();
-        let pref = if node.range().contains(&cursor) {
-            &pref[..cursor - node.offset()]
-        } else {
-            pref
-        };
-
-        // The deref target should be on the same line as the cursor.
-        // Assuming the underlying text is utf-8 encoded, we can check for newlines by
-        // looking for b'\n'.
-        // todo: if we are in markup mode, we should check if we are at start of node
-        !pref.contains(&b'\n')
-    }
-
-    // Move to the first non-trivia node before the cursor.
-    let mut node = node;
-    if can_skip_trivia(&node, cursor) {
-        node = node.prev_sibling()?;
-    }
-
-    // Move to the first ancestor that is an expression.
-    let ancestor = deref_expr(node)?;
-    crate::log_debug_ct!("deref expr: {ancestor:?}");
-
-    // Unwrap all parentheses to get the actual expression.
-    let cano_expr = deref_lvalue(ancestor)?;
-    crate::log_debug_ct!("deref lvalue: {cano_expr:?}");
-
-    // Identify convenient expression kinds.
-    let expr = cano_expr.cast::<ast::Expr>()?;
-    Some(match expr {
-        ast::Expr::Label(..) => DerefTarget::Label(cano_expr),
-        ast::Expr::Ref(..) => DerefTarget::Ref(cano_expr),
-        ast::Expr::FuncCall(call) => DerefTarget::Callee(cano_expr.find(call.callee().span())?),
-        ast::Expr::Set(set) => DerefTarget::Callee(cano_expr.find(set.target().span())?),
-        ast::Expr::Ident(..) | ast::Expr::MathIdent(..) | ast::Expr::FieldAccess(..) => {
-            DerefTarget::VarAccess(cano_expr)
-        }
-        ast::Expr::Str(..) => {
-            let parent = cano_expr.parent()?;
-            if parent.kind() == SyntaxKind::ModuleImport {
-                DerefTarget::ImportPath(cano_expr)
-            } else if parent.kind() == SyntaxKind::ModuleInclude {
-                DerefTarget::IncludePath(cano_expr)
-            } else {
-                DerefTarget::Normal(cano_expr.kind(), cano_expr)
-            }
-        }
-        _ if expr.hash()
-            || matches!(cano_expr.kind(), SyntaxKind::MathIdent | SyntaxKind::Error) =>
-        {
-            DerefTarget::Normal(cano_expr.kind(), cano_expr)
-        }
-        _ => return None,
-    })
-}
-
-#[derive(Debug, Clone)]
-pub enum DefTarget<'a> {
+pub enum DefClass<'a> {
+    /// A let binding item.
     Let(LinkedNode<'a>),
+    /// A module import item.
     Import(LinkedNode<'a>),
 }
 
-impl DefTarget<'_> {
+impl DefClass<'_> {
+    /// Gets the node of the def class.
     pub fn node(&self) -> &LinkedNode {
         match self {
-            DefTarget::Let(node) => node,
-            DefTarget::Import(node) => node,
+            DefClass::Let(node) => node,
+            DefClass::Import(node) => node,
         }
     }
 
-    pub fn name_range(&self) -> Option<Range<usize>> {
-        self.name().map(|node| node.range())
-    }
-
+    /// Gets the name node of the def class.
     pub fn name(&self) -> Option<LinkedNode> {
         match self {
-            DefTarget::Let(node) => {
+            DefClass::Let(node) => {
                 let lb: ast::LetBinding<'_> = node.cast()?;
                 let names = match lb.kind() {
                     ast::LetBindingKind::Closure(name) => node.find(name.span())?,
@@ -424,7 +357,7 @@ impl DefTarget<'_> {
 
                 Some(names)
             }
-            DefTarget::Import(_node) => {
+            DefClass::Import(_node) => {
                 // let ident = node.cast::<ast::ImportItem>()?;
                 // Some(ident.span().into())
                 // todo: implement this
@@ -432,18 +365,26 @@ impl DefTarget<'_> {
             }
         }
     }
+
+    /// Gets the name's range in code of the def class.
+    pub fn name_range(&self) -> Option<Range<usize>> {
+        self.name().map(|node| node.range())
+    }
 }
 
-// todo: whether we should distinguish between strict and non-strict def targets
-pub fn get_non_strict_def_target(node: LinkedNode) -> Option<DefTarget<'_>> {
-    get_def_target_(node, false)
+// todo: whether we should distinguish between strict and loose def classes
+/// Classifies a definition loosely.
+pub fn classify_def_loosely(node: LinkedNode) -> Option<DefClass<'_>> {
+    classify_def_(node, false)
 }
 
-pub fn get_def_target(node: LinkedNode) -> Option<DefTarget<'_>> {
-    get_def_target_(node, true)
+/// Classifies a definition strictly.
+pub fn classify_def(node: LinkedNode) -> Option<DefClass<'_>> {
+    classify_def_(node, true)
 }
 
-fn get_def_target_(node: LinkedNode, strict: bool) -> Option<DefTarget<'_>> {
+/// The internal implementation of classifying a definition.
+fn classify_def_(node: LinkedNode, strict: bool) -> Option<DefClass<'_>> {
     let mut ancestor = node;
     if ancestor.kind().is_trivia() || is_mark(ancestor.kind()) {
         ancestor = ancestor.prev_sibling()?;
@@ -452,126 +393,576 @@ fn get_def_target_(node: LinkedNode, strict: bool) -> Option<DefTarget<'_>> {
     while !ancestor.is::<ast::Expr>() {
         ancestor = ancestor.parent()?.clone();
     }
-    crate::log_debug_ct!("def expr: {ancestor:?}");
-    let ancestor = deref_lvalue(ancestor)?;
-    crate::log_debug_ct!("def lvalue: {ancestor:?}");
+    crate::log_debug_ct!("ancestor: {ancestor:?}");
+    let adjusted = adjust_expr(ancestor)?;
+    crate::log_debug_ct!("adjust_expr: {adjusted:?}");
 
-    let may_ident = ancestor.cast::<ast::Expr>()?;
+    let may_ident = adjusted.cast::<ast::Expr>()?;
     if strict && !may_ident.hash() && !matches!(may_ident, ast::Expr::MathIdent(_)) {
         return None;
     }
 
-    Some(match may_ident {
+    let expr = may_ident;
+    Some(match expr {
         // todo: label, reference
-        // todo: import
         // todo: include
         ast::Expr::FuncCall(..) => return None,
         ast::Expr::Set(..) => return None,
-        ast::Expr::Let(..) => DefTarget::Let(ancestor),
-        ast::Expr::Import(..) => DefTarget::Import(ancestor),
+        ast::Expr::Let(..) => DefClass::Let(adjusted),
+        ast::Expr::Import(..) => DefClass::Import(adjusted),
         // todo: parameter
         ast::Expr::Ident(..)
         | ast::Expr::MathIdent(..)
         | ast::Expr::FieldAccess(..)
         | ast::Expr::Closure(..) => {
-            let mut ancestor = ancestor;
+            let mut ancestor = adjusted;
             while !ancestor.is::<ast::LetBinding>() {
                 ancestor = ancestor.parent()?.clone();
             }
 
-            DefTarget::Let(ancestor)
+            DefClass::Let(ancestor)
         }
         ast::Expr::Str(..) => {
-            let parent = ancestor.parent()?;
+            let parent = adjusted.parent()?;
             if parent.kind() != SyntaxKind::ModuleImport {
                 return None;
             }
 
-            DefTarget::Import(parent.clone())
+            DefClass::Import(parent.clone())
         }
-        _ if may_ident.hash() => return None,
+        _ if expr.hash() => return None,
         _ => {
-            crate::log_debug_ct!("unsupported kind {kind:?}", kind = ancestor.kind());
+            crate::log_debug_ct!("unsupported kind {:?}", adjusted.kind());
             return None;
         }
     })
 }
 
+/// Adjusts an expression node to a more suitable one for classification.
+/// It is not formal, but the following cases are forbidden:
+/// - Parenthesized expression.
+/// - Identifier on the right side of a dot operator (field access).
+fn adjust_expr(mut node: LinkedNode) -> Option<LinkedNode> {
+    while let Some(paren_expr) = node.cast::<ast::Parenthesized>() {
+        node = node.find(paren_expr.expr().span())?;
+    }
+    if let Some(parent) = node.parent() {
+        if let Some(field_access) = parent.cast::<ast::FieldAccess>() {
+            if node.span() == field_access.field().span() {
+                return Some(parent.clone());
+            }
+        }
+    }
+    Some(node)
+}
+
+/// Classes of field syntax that can be operated on by IDE functionality.
 #[derive(Debug, Clone)]
-pub enum ParamTarget<'a> {
+pub enum FieldClass<'a> {
+    Field(LinkedNode<'a>),
+    DotSuffix(SourceSpanOffset),
+}
+
+impl FieldClass<'_> {
+    /// Gets the node of the field class.
+    pub fn offset(&self, source: &Source) -> Option<usize> {
+        Some(match self {
+            Self::Field(node) => node.offset(),
+            Self::DotSuffix(span_offset) => {
+                source.find(span_offset.span)?.offset() + span_offset.offset
+            }
+        })
+    }
+}
+
+/// Classes of variable (access) syntax that can be operated on by IDE
+/// functionality.
+#[derive(Debug, Clone)]
+pub enum VarClass<'a> {
+    /// An identifier expression.
+    Ident(LinkedNode<'a>),
+    /// A field access expression.
+    FieldAccess(LinkedNode<'a>),
+    /// A dot access expression, for example, `#a.|`, `$a.|$`, or `x.|.y`.
+    /// Note the cursor of the last example is on the middle of the spread
+    /// operator.
+    DotAccess(LinkedNode<'a>),
+}
+
+impl<'a> VarClass<'a> {
+    /// Gets the node of the var (access) class.
+    pub fn node(&self) -> &LinkedNode<'a> {
+        match self {
+            Self::Ident(node) | Self::FieldAccess(node) | Self::DotAccess(node) => node,
+        }
+    }
+
+    /// Gets the accessed node of the var (access) class.
+    pub fn accessed_node(&self) -> Option<LinkedNode<'a>> {
+        Some(match self {
+            Self::Ident(node) => node.clone(),
+            Self::FieldAccess(node) => {
+                let field_access = node.cast::<ast::FieldAccess>()?;
+                node.find(field_access.target().span())?
+            }
+            Self::DotAccess(node) => node.clone(),
+        })
+    }
+
+    /// Gets the accessing field of the var (access) class.
+    pub fn accessing_field(&self) -> Option<FieldClass<'a>> {
+        match self {
+            Self::FieldAccess(node) => {
+                let dot = node
+                    .children()
+                    .find(|n| matches!(n.kind(), SyntaxKind::Dot))?;
+                let mut iter_after_dot =
+                    node.children().skip_while(|n| n.kind() != SyntaxKind::Dot);
+                let ident = iter_after_dot.find(|n| {
+                    matches!(
+                        n.kind(),
+                        SyntaxKind::Ident | SyntaxKind::MathIdent | SyntaxKind::Error
+                    )
+                });
+
+                let ident_case = ident.map(|ident| {
+                    if ident.text().is_empty() {
+                        FieldClass::DotSuffix(SourceSpanOffset {
+                            span: ident.span(),
+                            offset: 0,
+                        })
+                    } else {
+                        FieldClass::Field(ident)
+                    }
+                });
+
+                ident_case.or_else(|| {
+                    Some(FieldClass::DotSuffix(SourceSpanOffset {
+                        span: dot.span(),
+                        offset: 1,
+                    }))
+                })
+            }
+            Self::DotAccess(node) => Some(FieldClass::DotSuffix(SourceSpanOffset {
+                span: node.span(),
+                offset: node.range().len() + 1,
+            })),
+            Self::Ident(_) => None,
+        }
+    }
+}
+
+/// Classes of syntax that can be operated on by IDE functionality.
+#[derive(Debug, Clone)]
+pub enum SyntaxClass<'a> {
+    /// A variable access expression.
+    ///
+    /// It can be either an identifier or a field access.
+    VarAccess(VarClass<'a>),
+    /// A (content) label expression.
+    Label {
+        node: LinkedNode<'a>,
+        is_error: bool,
+    },
+    /// A (content) reference expression.
+    Ref(LinkedNode<'a>),
+    /// A callee expression.
+    Callee(LinkedNode<'a>),
+    /// An import path expression.
+    ImportPath(LinkedNode<'a>),
+    /// An include path expression.
+    IncludePath(LinkedNode<'a>),
+    /// Rest kind of **expressions**.
+    Normal(SyntaxKind, LinkedNode<'a>),
+}
+
+impl<'a> SyntaxClass<'a> {
+    /// Creates a label syntax class.
+    pub fn label(node: LinkedNode<'a>) -> Self {
+        Self::Label {
+            node,
+            is_error: false,
+        }
+    }
+
+    /// Creates an error label syntax class.
+    pub fn error_as_label(node: LinkedNode<'a>) -> Self {
+        Self::Label {
+            node,
+            is_error: true,
+        }
+    }
+
+    /// Gets the node of the syntax class.
+    pub fn node(&self) -> &LinkedNode<'a> {
+        match self {
+            SyntaxClass::VarAccess(cls) => cls.node(),
+            SyntaxClass::Label { node, .. }
+            | SyntaxClass::Ref(node)
+            | SyntaxClass::Callee(node)
+            | SyntaxClass::ImportPath(node)
+            | SyntaxClass::IncludePath(node)
+            | SyntaxClass::Normal(_, node) => node,
+        }
+    }
+
+    /// Gets the content offset at which the completion should be triggered.
+    pub fn complete_offset(&self) -> Option<usize> {
+        match self {
+            // `<label`
+            //   ^ node.offset() + 1
+            SyntaxClass::Label { node, .. } => Some(node.offset() + 1),
+            _ => None,
+        }
+    }
+}
+
+/// Classifies node's syntax (inner syntax) that can be operated on by IDE
+/// functionality.
+pub fn classify_syntax(node: LinkedNode, cursor: usize) -> Option<SyntaxClass<'_>> {
+    if matches!(node.kind(), SyntaxKind::Error) && node.text().starts_with('<') {
+        return Some(SyntaxClass::error_as_label(node));
+    }
+
+    /// Skips trivia nodes that are on the same line as the cursor.
+    fn can_skip_trivia(node: &LinkedNode, cursor: usize) -> bool {
+        // A non-trivia node is our target so we stop at it.
+        if !node.kind().is_trivia() || !node.parent_kind().is_some_and(possible_in_code_trivia) {
+            return false;
+        }
+
+        // Get the trivia text before the cursor.
+        let previous_text = node.text().as_bytes();
+        let previous_text = if node.range().contains(&cursor) {
+            &previous_text[..cursor - node.offset()]
+        } else {
+            previous_text
+        };
+
+        // The deref target should be on the same line as the cursor.
+        // Assuming the underlying text is utf-8 encoded, we can check for newlines by
+        // looking for b'\n'.
+        // todo: if we are in markup mode, we should check if we are at start of node
+        !previous_text.contains(&b'\n')
+    }
+
+    // Move to the first non-trivia node before the cursor.
+    let mut node = node;
+    if can_skip_trivia(&node, cursor) {
+        node = node.prev_sibling()?;
+    }
+
+    if node.offset() + 1 == cursor && {
+        // Check if the cursor is exactly after single dot.
+        matches!(node.kind(), SyntaxKind::Dot)
+            || (matches!(node.kind(), SyntaxKind::Text | SyntaxKind::Error)
+                && node.text().starts_with("."))
+    } {
+        let dot_target = node.clone().prev_leaf().and_then(first_ancestor_expr);
+
+        if let Some(dot_target) = dot_target {
+            return Some(SyntaxClass::VarAccess(VarClass::DotAccess(dot_target)));
+        }
+    }
+
+    if node.offset() + 1 == cursor && matches!(node.kind(), SyntaxKind::Dots) {
+        let dot_target = node.parent()?;
+        if dot_target.kind() == SyntaxKind::Spread {
+            let dot_target = dot_target.prev_leaf().and_then(first_ancestor_expr);
+
+            if let Some(dot_target) = dot_target {
+                return Some(SyntaxClass::VarAccess(VarClass::DotAccess(dot_target)));
+            }
+        }
+    }
+
+    // Move to the first ancestor that is an expression.
+    let ancestor = first_ancestor_expr(node)?;
+    crate::log_debug_ct!("first_ancestor_expr: {ancestor:?}");
+
+    // Unwrap all parentheses to get the actual expression.
+    let adjusted = adjust_expr(ancestor)?;
+    crate::log_debug_ct!("adjust_expr: {adjusted:?}");
+
+    // Identify convenient expression kinds.
+    let expr = adjusted.cast::<ast::Expr>()?;
+    Some(match expr {
+        ast::Expr::Label(..) => SyntaxClass::label(adjusted),
+        ast::Expr::Ref(..) => SyntaxClass::Ref(adjusted),
+        ast::Expr::FuncCall(call) => SyntaxClass::Callee(adjusted.find(call.callee().span())?),
+        ast::Expr::Set(set) => SyntaxClass::Callee(adjusted.find(set.target().span())?),
+        ast::Expr::Ident(..) | ast::Expr::MathIdent(..) => {
+            SyntaxClass::VarAccess(VarClass::Ident(adjusted))
+        }
+        ast::Expr::FieldAccess(..) => SyntaxClass::VarAccess(VarClass::FieldAccess(adjusted)),
+        ast::Expr::Str(..) => {
+            let parent = adjusted.parent()?;
+            if parent.kind() == SyntaxKind::ModuleImport {
+                SyntaxClass::ImportPath(adjusted)
+            } else if parent.kind() == SyntaxKind::ModuleInclude {
+                SyntaxClass::IncludePath(adjusted)
+            } else {
+                SyntaxClass::Normal(adjusted.kind(), adjusted)
+            }
+        }
+        _ if expr.hash()
+            || matches!(adjusted.kind(), SyntaxKind::MathIdent | SyntaxKind::Error) =>
+        {
+            SyntaxClass::Normal(adjusted.kind(), adjusted)
+        }
+        _ => return None,
+    })
+}
+
+/// Whether the node might be in code trivia. This is a bit internal so please
+/// check the caller to understand it.
+fn possible_in_code_trivia(kind: SyntaxKind) -> bool {
+    !matches!(
+        interpret_mode_at_kind(kind),
+        Some(InterpretMode::Markup | InterpretMode::Math | InterpretMode::Comment)
+    )
+}
+
+/// Classes of arguments that can be operated on by IDE functionality.
+#[derive(Debug, Clone)]
+pub enum ArgClass<'a> {
+    /// A positional argument.
     Positional {
         spreads: EcoVec<LinkedNode<'a>>,
         positional: usize,
         is_spread: bool,
     },
+    /// A named argument.
     Named(LinkedNode<'a>),
 }
-impl ParamTarget<'_> {
-    pub(crate) fn positional_from_before(before: bool) -> Self {
-        ParamTarget::Positional {
+
+impl ArgClass<'_> {
+    /// Creates the class refer to the first positional argument.
+    pub(crate) fn first_positional() -> Self {
+        ArgClass::Positional {
             spreads: EcoVec::new(),
-            positional: if before { 0 } else { 1 },
+            positional: 0,
             is_spread: false,
         }
     }
 }
 
+// todo: whether we can merge `SurroundingSyntax` and `SyntaxContext`?
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash, strum::EnumIter)]
+pub enum SurroundingSyntax {
+    Regular,
+    StringContent,
+    Selector,
+    ShowTransform,
+    ImportList,
+    SetRule,
+}
+
+pub fn surrounding_syntax(node: &LinkedNode) -> SurroundingSyntax {
+    check_previous_syntax(node)
+        .or_else(|| check_surrounding_syntax(node))
+        .unwrap_or(SurroundingSyntax::Regular)
+}
+
+fn check_surrounding_syntax(mut leaf: &LinkedNode) -> Option<SurroundingSyntax> {
+    use SurroundingSyntax::*;
+    let mut met_args = false;
+
+    if matches!(leaf.kind(), SyntaxKind::Str) {
+        return Some(StringContent);
+    }
+
+    while let Some(parent) = leaf.parent() {
+        crate::log_debug_ct!(
+            "check_surrounding_syntax: {:?}::{:?}",
+            parent.kind(),
+            leaf.kind()
+        );
+        match parent.kind() {
+            SyntaxKind::CodeBlock
+            | SyntaxKind::ContentBlock
+            | SyntaxKind::Equation
+            | SyntaxKind::Closure => {
+                return Some(Regular);
+            }
+            SyntaxKind::ImportItemPath
+            | SyntaxKind::ImportItems
+            | SyntaxKind::RenamedImportItem => {
+                return Some(ImportList);
+            }
+            SyntaxKind::ModuleImport => {
+                let colon = parent.children().find(|s| s.kind() == SyntaxKind::Colon);
+                let Some(colon) = colon else {
+                    return Some(Regular);
+                };
+
+                if leaf.offset() >= colon.offset() {
+                    return Some(ImportList);
+                } else {
+                    return Some(Regular);
+                }
+            }
+            SyntaxKind::Named => {
+                return Some(Regular);
+            }
+            SyntaxKind::Args => {
+                met_args = true;
+            }
+            SyntaxKind::SetRule => {
+                let rule = parent.get().cast::<ast::SetRule>()?;
+                if met_args || enclosed_by(parent, rule.condition().map(|s| s.span()), leaf) {
+                    return Some(Regular);
+                } else {
+                    return Some(SetRule);
+                }
+            }
+            SyntaxKind::ShowRule => {
+                if met_args {
+                    return Some(Regular);
+                }
+
+                let rule = parent.get().cast::<ast::ShowRule>()?;
+                let colon = rule
+                    .to_untyped()
+                    .children()
+                    .find(|s| s.kind() == SyntaxKind::Colon);
+                let Some(colon) = colon.and_then(|colon| parent.find(colon.span())) else {
+                    // incomplete show rule
+                    return Some(Selector);
+                };
+
+                if leaf.offset() >= colon.offset() {
+                    return Some(ShowTransform);
+                } else {
+                    return Some(Selector); // query's first argument
+                }
+            }
+            _ => {}
+        }
+
+        leaf = parent;
+    }
+
+    None
+}
+
+fn check_previous_syntax(leaf: &LinkedNode) -> Option<SurroundingSyntax> {
+    let mut leaf = leaf.clone();
+    if leaf.kind().is_trivia() {
+        leaf = leaf.prev_sibling()?;
+    }
+    if matches!(
+        leaf.kind(),
+        SyntaxKind::ShowRule
+            | SyntaxKind::SetRule
+            | SyntaxKind::ModuleImport
+            | SyntaxKind::ModuleInclude
+    ) {
+        return check_surrounding_syntax(&leaf.rightmost_leaf()?);
+    }
+
+    if matches!(leaf.kind(), SyntaxKind::Show) {
+        return Some(SurroundingSyntax::Selector);
+    }
+    if matches!(leaf.kind(), SyntaxKind::Set) {
+        return Some(SurroundingSyntax::SetRule);
+    }
+
+    None
+}
+
+fn enclosed_by(parent: &LinkedNode, s: Option<Span>, leaf: &LinkedNode) -> bool {
+    s.and_then(|s| parent.find(s)?.find(leaf.span())).is_some()
+}
+
+/// Classes of syntax context (outer syntax) that can be operated on by IDE
+/// functionality.
+///
+/// A syntax context is either a [`SyntaxClass`] or other things.
+/// One thing is not ncessary to refer to some exact node. For example, a cursor
+/// moving after some comma in a function call is identified as a
+/// [`SyntaxContext::Arg`].
 #[derive(Debug, Clone)]
-pub enum CheckTarget<'a> {
-    Param {
+pub enum SyntaxContext<'a> {
+    /// A cursor on an argument.
+    Arg {
         callee: LinkedNode<'a>,
         args: LinkedNode<'a>,
-        target: ParamTarget<'a>,
+        target: ArgClass<'a>,
         is_set: bool,
     },
+    /// A cursor on an element in an array or dictionary literal.
     Element {
         container: LinkedNode<'a>,
-        target: ParamTarget<'a>,
+        target: ArgClass<'a>,
     },
+    /// A cursor on a parenthesized expression.
     Paren {
         container: LinkedNode<'a>,
         is_before: bool,
     },
+    /// A variable access expression.
+    ///
+    /// It can be either an identifier or a field access.
+    VarAccess(VarClass<'a>),
+    /// A cursor on an import path.
+    ImportPath(LinkedNode<'a>),
+    /// A cursor on an include path.
+    IncludePath(LinkedNode<'a>),
+    /// A cursor on a label.
+    Label {
+        node: LinkedNode<'a>,
+        is_error: bool,
+    },
+    /// A cursor on a normal [`SyntaxClass`].
     Normal(LinkedNode<'a>),
 }
 
-impl<'a> CheckTarget<'a> {
+impl<'a> SyntaxContext<'a> {
+    /// Gets the node of the cursor class.
     pub fn node(&self) -> Option<LinkedNode<'a>> {
         Some(match self {
-            CheckTarget::Param { target, .. } => match target {
-                ParamTarget::Positional { .. } => return None,
-                ParamTarget::Named(node) => node.clone(),
-            },
-            CheckTarget::Element { target, .. } => match target {
-                ParamTarget::Positional { .. } => return None,
-                ParamTarget::Named(node) => node.clone(),
-            },
-            CheckTarget::Paren { container, .. } => container.clone(),
-            CheckTarget::Normal(node) => node.clone(),
+            SyntaxContext::Arg { target, .. } | SyntaxContext::Element { target, .. } => {
+                match target {
+                    ArgClass::Positional { .. } => return None,
+                    ArgClass::Named(node) => node.clone(),
+                }
+            }
+            SyntaxContext::VarAccess(cls) => cls.node().clone(),
+            SyntaxContext::Paren { container, .. } => container.clone(),
+            SyntaxContext::Label { node, .. }
+            | SyntaxContext::ImportPath(node)
+            | SyntaxContext::IncludePath(node)
+            | SyntaxContext::Normal(node) => node.clone(),
         })
     }
 }
 
+/// Kind of argument source.
 #[derive(Debug)]
-enum ParamKind {
+enum ArgSourceKind {
+    /// An argument in a function call.
     Call,
+    /// An argument (element) in an array literal.
     Array,
+    /// An argument (element) in a dictionary literal.
     Dict,
 }
 
-pub fn get_check_target_by_context<'a>(
-    context: LinkedNode<'a>,
+/// Classifies node's context (outer syntax) by outer node that can be operated
+/// on by IDE functionality.
+pub fn classify_context_outer<'a>(
+    outer: LinkedNode<'a>,
     node: LinkedNode<'a>,
-) -> Option<CheckTarget<'a>> {
-    let context_deref_target = get_deref_target(context.clone(), node.offset())?;
-    let node_deref_target = get_deref_target(node.clone(), node.offset())?;
+) -> Option<SyntaxContext<'a>> {
+    use SyntaxClass::*;
+    let context_syntax = classify_syntax(outer.clone(), node.offset())?;
+    let node_syntax = classify_syntax(node.clone(), node.offset())?;
 
-    match context_deref_target {
-        DerefTarget::Callee(callee)
-            if matches!(
-                node_deref_target,
-                DerefTarget::Normal(..) | DerefTarget::Label(..) | DerefTarget::Ref(..)
-            ) && !matches!(node_deref_target, DerefTarget::Callee(..)) =>
+    match context_syntax {
+        Callee(callee)
+            if matches!(node_syntax, Normal(..) | Label { .. } | Ref(..))
+                && !matches!(node_syntax, Callee(..)) =>
         {
             let parent = callee.parent()?;
             let args = match parent.cast::<ast::Expr>() {
@@ -582,11 +973,11 @@ pub fn get_check_target_by_context<'a>(
             let args = parent.find(args.span())?;
 
             let is_set = parent.kind() == SyntaxKind::SetRule;
-            let target = get_param_target(args.clone(), node, ParamKind::Call)?;
-            Some(CheckTarget::Param {
+            let arg_target = arg_context(args.clone(), node, ArgSourceKind::Call)?;
+            Some(SyntaxContext::Arg {
                 callee,
                 args,
-                target,
+                target: arg_target,
                 is_set,
             })
         }
@@ -594,14 +985,9 @@ pub fn get_check_target_by_context<'a>(
     }
 }
 
-fn possible_in_code_trivia(sk: SyntaxKind) -> bool {
-    !matches!(
-        interpret_mode_at_kind(sk),
-        Some(InterpretMode::Markup | InterpretMode::Math | InterpretMode::Comment)
-    )
-}
-
-pub fn get_check_target(node: LinkedNode) -> Option<CheckTarget<'_>> {
+/// Classifies node's context (outer syntax) that can be operated on by IDE
+/// functionality.
+pub fn classify_context(node: LinkedNode, cursor: Option<usize>) -> Option<SyntaxContext<'_>> {
     let mut node = node;
     if node.kind().is_trivia() && node.parent_kind().is_some_and(possible_in_code_trivia) {
         loop {
@@ -613,41 +999,48 @@ pub fn get_check_target(node: LinkedNode) -> Option<CheckTarget<'_>> {
         }
     }
 
-    let deref_target = get_deref_target(node.clone(), node.offset())?;
+    let cursor = cursor.unwrap_or_else(|| node.offset());
+    let syntax = classify_syntax(node.clone(), cursor)?;
 
-    let deref_node = match deref_target {
-        DerefTarget::Callee(callee) => {
-            return get_callee_target(callee, node);
+    let normal_syntax = match syntax {
+        SyntaxClass::Callee(callee) => {
+            return callee_context(callee, node);
         }
-        DerefTarget::ImportPath(node) | DerefTarget::IncludePath(node) => {
-            return Some(CheckTarget::Normal(node));
+        SyntaxClass::Label { node, is_error } => {
+            return Some(SyntaxContext::Label { node, is_error });
         }
-        deref_target => deref_target.node().clone(),
+        SyntaxClass::ImportPath(node) => {
+            return Some(SyntaxContext::ImportPath(node));
+        }
+        SyntaxClass::IncludePath(node) => {
+            return Some(SyntaxContext::IncludePath(node));
+        }
+        syntax => syntax,
     };
 
     let Some(mut node_parent) = node.parent().cloned() else {
-        return Some(CheckTarget::Normal(node));
+        return Some(SyntaxContext::Normal(node));
     };
 
     while let SyntaxKind::Named | SyntaxKind::Colon = node_parent.kind() {
-        let Some(p) = node_parent.parent() else {
-            return Some(CheckTarget::Normal(node));
+        let Some(parent) = node_parent.parent() else {
+            return Some(SyntaxContext::Normal(node));
         };
-        node_parent = p.clone();
+        node_parent = parent.clone();
     }
 
     match node_parent.kind() {
         SyntaxKind::Args => {
-            let callee = node_ancestors(&node_parent).find_map(|p| {
-                let s = match p.cast::<ast::Expr>()? {
+            let callee = node_ancestors(&node_parent).find_map(|ancestor| {
+                let span = match ancestor.cast::<ast::Expr>()? {
                     ast::Expr::FuncCall(call) => call.callee().span(),
                     ast::Expr::Set(set) => set.target().span(),
                     _ => return None,
                 };
-                p.find(s)
+                ancestor.find(span)
             })?;
 
-            let node = match node.kind() {
+            let param_node = match node.kind() {
                 SyntaxKind::Ident
                     if matches!(
                         node.parent_kind().zip(node.next_sibling_kind()),
@@ -662,35 +1055,38 @@ pub fn get_check_target(node: LinkedNode) -> Option<CheckTarget<'_>> {
                 _ => node,
             };
 
-            get_callee_target(callee, node)
+            callee_context(callee, param_node)
         }
         SyntaxKind::Array | SyntaxKind::Dict => {
-            let target = get_param_target(
+            let element_target = arg_context(
                 node_parent.clone(),
                 node.clone(),
                 match node_parent.kind() {
-                    SyntaxKind::Array => ParamKind::Array,
-                    SyntaxKind::Dict => ParamKind::Dict,
+                    SyntaxKind::Array => ArgSourceKind::Array,
+                    SyntaxKind::Dict => ArgSourceKind::Dict,
                     _ => unreachable!(),
                 },
             )?;
-            Some(CheckTarget::Element {
+            Some(SyntaxContext::Element {
                 container: node_parent.clone(),
-                target,
+                target: element_target,
             })
         }
         SyntaxKind::Parenthesized => {
             let is_before = node.offset() <= node_parent.offset() + 1;
-            Some(CheckTarget::Paren {
+            Some(SyntaxContext::Paren {
                 container: node_parent.clone(),
                 is_before,
             })
         }
-        _ => Some(CheckTarget::Normal(deref_node)),
+        _ => Some(match normal_syntax {
+            SyntaxClass::VarAccess(v) => SyntaxContext::VarAccess(v),
+            normal_syntax => SyntaxContext::Normal(normal_syntax.node().clone()),
+        }),
     }
 }
 
-fn get_callee_target<'a>(callee: LinkedNode<'a>, node: LinkedNode<'a>) -> Option<CheckTarget<'a>> {
+fn callee_context<'a>(callee: LinkedNode<'a>, node: LinkedNode<'a>) -> Option<SyntaxContext<'a>> {
     let parent = callee.parent()?;
     let args = match parent.cast::<ast::Expr>() {
         Some(ast::Expr::FuncCall(call)) => call.args(),
@@ -700,8 +1096,8 @@ fn get_callee_target<'a>(callee: LinkedNode<'a>, node: LinkedNode<'a>) -> Option
     let args = parent.find(args.span())?;
 
     let is_set = parent.kind() == SyntaxKind::SetRule;
-    let target = get_param_target(args.clone(), node, ParamKind::Call)?;
-    Some(CheckTarget::Param {
+    let target = arg_context(args.clone(), node, ArgSourceKind::Call)?;
+    Some(SyntaxContext::Arg {
         callee,
         args,
         target,
@@ -709,23 +1105,23 @@ fn get_callee_target<'a>(callee: LinkedNode<'a>, node: LinkedNode<'a>) -> Option
     })
 }
 
-fn get_param_target<'a>(
+fn arg_context<'a>(
     args_node: LinkedNode<'a>,
     mut node: LinkedNode<'a>,
-    param_kind: ParamKind,
-) -> Option<ParamTarget<'a>> {
+    param_kind: ArgSourceKind,
+) -> Option<ArgClass<'a>> {
     if node.kind() == SyntaxKind::RightParen {
         node = node.prev_sibling()?;
     }
     match node.kind() {
         SyntaxKind::Named => {
             let param_ident = node.cast::<ast::Named>()?.name();
-            Some(ParamTarget::Named(args_node.find(param_ident.span())?))
+            Some(ArgClass::Named(args_node.find(param_ident.span())?))
         }
         SyntaxKind::Colon => {
             let prev = node.prev_leaf()?;
             let param_ident = prev.cast::<ast::Ident>()?;
-            Some(ParamTarget::Named(args_node.find(param_ident.span())?))
+            Some(ArgClass::Named(args_node.find(param_ident.span())?))
         }
         _ => {
             let mut spreads = EcoVec::new();
@@ -736,7 +1132,7 @@ fn get_param_target<'a>(
                 .children()
                 .take_while(|arg| arg.range().end <= node.offset());
             match param_kind {
-                ParamKind::Call => {
+                ArgSourceKind::Call => {
                     for ch in args_before {
                         match ch.cast::<ast::Arg>() {
                             Some(ast::Arg::Pos(..)) => {
@@ -749,7 +1145,7 @@ fn get_param_target<'a>(
                         }
                     }
                 }
-                ParamKind::Array => {
+                ArgSourceKind::Array => {
                     for ch in args_before {
                         match ch.cast::<ast::ArrayItem>() {
                             Some(ast::ArrayItem::Pos(..)) => {
@@ -762,7 +1158,7 @@ fn get_param_target<'a>(
                         }
                     }
                 }
-                ParamKind::Dict => {
+                ArgSourceKind::Dict => {
                     for ch in args_before {
                         if let Some(ast::DictItem::Spread(..)) = ch.cast::<ast::DictItem>() {
                             spreads.push(ch);
@@ -771,71 +1167,12 @@ fn get_param_target<'a>(
                 }
             }
 
-            Some(ParamTarget::Positional {
+            Some(ArgClass::Positional {
                 spreads,
                 positional,
                 is_spread,
             })
         }
-    }
-}
-
-pub fn param_index_at_leaf(leaf: &LinkedNode, function: &Func, args: ast::Args) -> Option<usize> {
-    let deciding = deciding_syntax(leaf);
-    let params = function.params()?;
-    let param_index = find_param_index(&deciding, params, args)?;
-    log::trace!("got param index {param_index}");
-    Some(param_index)
-}
-
-/// Find the piece of syntax that decides what we're completing.
-fn deciding_syntax<'b>(leaf: &'b LinkedNode) -> LinkedNode<'b> {
-    let mut deciding = leaf.clone();
-    while !matches!(
-        deciding.kind(),
-        SyntaxKind::LeftParen | SyntaxKind::Comma | SyntaxKind::Colon
-    ) {
-        let Some(prev) = deciding.prev_leaf() else {
-            break;
-        };
-        deciding = prev;
-    }
-    deciding
-}
-
-fn find_param_index(deciding: &LinkedNode, params: &[ParamInfo], args: ast::Args) -> Option<usize> {
-    match deciding.kind() {
-        // After colon: "func(param:|)", "func(param: |)".
-        SyntaxKind::Colon => {
-            let prev = deciding.prev_leaf()?;
-            let param_ident = prev.cast::<ast::Ident>()?;
-            params
-                .iter()
-                .position(|param| param.name == param_ident.as_str())
-        }
-        // Before: "func(|)", "func(hi|)", "func(12,|)".
-        SyntaxKind::Comma | SyntaxKind::LeftParen => {
-            let next = deciding.next_leaf();
-            let following_param = next.as_ref().and_then(|next| next.cast::<ast::Ident>());
-            match following_param {
-                Some(next) => params
-                    .iter()
-                    .position(|param| param.named && param.name.starts_with(next.as_str())),
-                None => {
-                    let positional_args_so_far = args
-                        .items()
-                        .filter(|arg| matches!(arg, ast::Arg::Pos(_)))
-                        .count();
-                    params
-                        .iter()
-                        .enumerate()
-                        .filter(|(_, param)| param.positional)
-                        .map(|(i, _)| i)
-                        .nth(positional_args_so_far)
-                }
-            }
-        }
-        _ => None,
     }
 }
 
@@ -846,7 +1183,7 @@ mod tests {
     use typst::syntax::{is_newline, Source};
     use typst_shim::syntax::LinkedNodeExt;
 
-    fn map_base(source: &str, mapper: impl Fn(&LinkedNode, usize) -> char) -> String {
+    fn map_node(source: &str, mapper: impl Fn(&LinkedNode, usize) -> char) -> String {
         let source = Source::detached(source.to_owned());
         let root = LinkedNode::new(source.root());
         let mut output_mapping = String::new();
@@ -870,40 +1207,44 @@ mod tests {
             .collect::<String>()
     }
 
-    fn map_deref(source: &str) -> String {
-        map_base(source, |root, cursor| {
+    fn map_syntax(source: &str) -> String {
+        map_node(source, |root, cursor| {
             let node = root.leaf_at_compat(cursor);
-            let kind = node.and_then(|node| get_deref_target(node, cursor));
+            let kind = node.and_then(|node| classify_syntax(node, cursor));
             match kind {
-                Some(DerefTarget::VarAccess(..)) => 'v',
-                Some(DerefTarget::Normal(..)) => 'n',
-                Some(DerefTarget::Label(..)) => 'l',
-                Some(DerefTarget::Ref(..)) => 'r',
-                Some(DerefTarget::Callee(..)) => 'c',
-                Some(DerefTarget::ImportPath(..)) => 'i',
-                Some(DerefTarget::IncludePath(..)) => 'I',
+                Some(SyntaxClass::VarAccess(..)) => 'v',
+                Some(SyntaxClass::Normal(..)) => 'n',
+                Some(SyntaxClass::Label { .. }) => 'l',
+                Some(SyntaxClass::Ref(..)) => 'r',
+                Some(SyntaxClass::Callee(..)) => 'c',
+                Some(SyntaxClass::ImportPath(..)) => 'i',
+                Some(SyntaxClass::IncludePath(..)) => 'I',
                 None => ' ',
             }
         })
     }
 
-    fn map_check(source: &str) -> String {
-        map_base(source, |root, cursor| {
+    fn map_context(source: &str) -> String {
+        map_node(source, |root, cursor| {
             let node = root.leaf_at_compat(cursor);
-            let kind = node.and_then(|node| get_check_target(node));
+            let kind = node.and_then(|node| classify_context(node, Some(cursor)));
             match kind {
-                Some(CheckTarget::Param { .. }) => 'p',
-                Some(CheckTarget::Element { .. }) => 'e',
-                Some(CheckTarget::Paren { .. }) => 'P',
-                Some(CheckTarget::Normal(..)) => 'n',
+                Some(SyntaxContext::Arg { .. }) => 'p',
+                Some(SyntaxContext::Element { .. }) => 'e',
+                Some(SyntaxContext::Paren { .. }) => 'P',
+                Some(SyntaxContext::VarAccess { .. }) => 'v',
+                Some(SyntaxContext::ImportPath(..)) => 'i',
+                Some(SyntaxContext::IncludePath(..)) => 'I',
+                Some(SyntaxContext::Label { .. }) => 'l',
+                Some(SyntaxContext::Normal(..)) => 'n',
                 None => ' ',
             }
         })
     }
 
     #[test]
-    fn test_get_deref_target() {
-        assert_snapshot!(map_deref(r#"#let x = 1  
+    fn test_get_syntax() {
+        assert_snapshot!(map_syntax(r#"#let x = 1  
 Text
 = Heading #let y = 2;  
 == Heading"#).trim(), @r"
@@ -915,55 +1256,103 @@ Text
                    nnnnvvnnn   
         == Heading
         ");
-        assert_snapshot!(map_deref(r#"#let f(x);"#).trim(), @r"
+        assert_snapshot!(map_syntax(r#"#let f(x);"#).trim(), @r"
         #let f(x);
          nnnnv v
+        ");
+        assert_snapshot!(map_syntax(r#"#{
+  calc.  
+}"#).trim(), @r"
+        #{
+         n
+          calc.  
+        nnvvvvvnn
+        }
+        n
         ");
     }
 
     #[test]
-    fn test_get_check_target() {
-        assert_snapshot!(map_check(r#"#let x = 1  
+    fn test_get_context() {
+        assert_snapshot!(map_context(r#"#let x = 1  
 Text
 = Heading #let y = 2;  
 == Heading"#).trim(), @r"
         #let x = 1  
-         nnnnnnnnn  
+         nnnnvvnnn  
         Text
             
         = Heading #let y = 2;  
-                   nnnnnnnnn   
+                   nnnnvvnnn   
         == Heading
         ");
-        assert_snapshot!(map_check(r#"#let f(x);"#).trim(), @r"
+        assert_snapshot!(map_context(r#"#let f(x);"#).trim(), @r"
         #let f(x);
-         nnnnn n
+         nnnnv v
         ");
-        assert_snapshot!(map_check(r#"#f(1, 2)   Test"#).trim(), @r"
+        assert_snapshot!(map_context(r#"#f(1, 2)   Test"#).trim(), @r"
         #f(1, 2)   Test
-         npppppp
+         vpppppp
         ");
-        assert_snapshot!(map_check(r#"#()   Test"#).trim(), @r"
+        assert_snapshot!(map_context(r#"#()   Test"#).trim(), @r"
         #()   Test
          ee
         ");
-        assert_snapshot!(map_check(r#"#(1)   Test"#).trim(), @r"
+        assert_snapshot!(map_context(r#"#(1)   Test"#).trim(), @r"
         #(1)   Test
          PPP
         ");
-        assert_snapshot!(map_check(r#"#(a: 1)   Test"#).trim(), @r"
+        assert_snapshot!(map_context(r#"#(a: 1)   Test"#).trim(), @r"
         #(a: 1)   Test
          eeeeee
         ");
-        assert_snapshot!(map_check(r#"#(1, 2)   Test"#).trim(), @r"
+        assert_snapshot!(map_context(r#"#(1, 2)   Test"#).trim(), @r"
         #(1, 2)   Test
          eeeeee
         ");
-        assert_snapshot!(map_check(r#"#(1, 2)  
+        assert_snapshot!(map_context(r#"#(1, 2)  
   Test"#).trim(), @r"
         #(1, 2)  
          eeeeee  
           Test
         ");
+    }
+
+    #[test]
+    fn test_access_field() {
+        fn test_fn(s: &str, cursor: i32) -> String {
+            test_fn_(s, cursor).unwrap_or_default()
+        }
+
+        fn test_fn_(s: &str, cursor: i32) -> Option<String> {
+            let cursor = if cursor < 0 {
+                s.len() as i32 + cursor
+            } else {
+                cursor
+            };
+            let source = Source::detached(s.to_owned());
+            let root = LinkedNode::new(source.root());
+            let node = root.leaf_at_compat(cursor as usize)?;
+            let syntax = classify_syntax(node, cursor as usize)?;
+            let SyntaxClass::VarAccess(var) = syntax else {
+                return None;
+            };
+
+            let field = var.accessing_field()?;
+            Some(match field {
+                FieldClass::Field(ident) => format!("Field: {}", ident.text()),
+                FieldClass::DotSuffix(span_offset) => {
+                    let offset = source.find(span_offset.span)?.offset() + span_offset.offset;
+                    format!("DotSuffix: {offset:?}")
+                }
+            })
+        }
+
+        assert_snapshot!(test_fn("#(a.b)", 5), @r"Field: b");
+        assert_snapshot!(test_fn("#a.", 3), @"DotSuffix: 3");
+        assert_snapshot!(test_fn("$a.$", 3), @"DotSuffix: 3");
+        assert_snapshot!(test_fn("#(a.)", 4), @"DotSuffix: 4");
+        assert_snapshot!(test_fn("#(a..b)", 4), @"DotSuffix: 4");
+        assert_snapshot!(test_fn("#(a..b())", 4), @"DotSuffix: 4");
     }
 }

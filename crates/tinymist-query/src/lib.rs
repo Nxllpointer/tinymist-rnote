@@ -15,9 +15,12 @@ pub mod syntax;
 pub mod ty;
 mod upstream;
 
-pub use analysis::{LocalContext, LocalContextGuard, LspWorldExt};
-pub use upstream::{with_vm, CompletionFeat, PostfixSnippet};
+pub use analysis::{CompletionFeat, LocalContext, LocalContextGuard, LspWorldExt};
+pub use completion::PostfixSnippet;
+pub use upstream::with_vm;
 
+mod entry;
+pub use entry::*;
 mod diagnostics;
 pub use diagnostics::*;
 mod code_action;
@@ -27,7 +30,7 @@ pub use code_context::*;
 mod code_lens;
 pub use code_lens::*;
 mod completion;
-pub use completion::*;
+pub use completion::CompletionRequest;
 mod color_presentation;
 pub use color_presentation::*;
 mod document_color;
@@ -151,6 +154,7 @@ macro_rules! log_debug_ct {
 
 #[allow(missing_docs)]
 mod polymorphic {
+    use completion::CompletionList;
     use lsp_types::TextEdit;
     use serde::{Deserialize, Serialize};
     use typst::foundations::Dict;
@@ -367,7 +371,8 @@ mod polymorphic {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(untagged)]
     pub enum CompilerQueryResponse {
         OnExport(Option<PathBuf>),
         Hover(Option<Hover>),
@@ -381,7 +386,7 @@ mod polymorphic {
         ColorPresentation(Option<Vec<ColorPresentation>>),
         CodeAction(Option<Vec<CodeActionOrCommand>>),
         CodeLens(Option<Vec<CodeLens>>),
-        Completion(Option<CompletionResponse>),
+        Completion(Option<CompletionList>),
         SignatureHelp(Option<SignatureHelp>),
         PrepareRename(Option<PrepareRenameResponse>),
         Rename(Option<WorkspaceEdit>),
@@ -394,48 +399,12 @@ mod polymorphic {
         Formatting(Option<Vec<TextEdit>>),
         FoldingRange(Option<Vec<FoldingRange>>),
         SelectionRange(Option<Vec<SelectionRange>>),
-        InteractCodeContext(Option<Vec<InteractCodeContextResponse>>),
+        InteractCodeContext(Option<Vec<Option<InteractCodeContextResponse>>>),
 
         OnEnter(Option<Vec<TextEdit>>),
 
         DocumentMetrics(Option<DocumentMetricsResponse>),
         ServerInfo(Option<HashMap<String, ServerInfoResponse>>),
-    }
-
-    impl CompilerQueryResponse {
-        pub fn to_untyped(self) -> serde_json::Result<JsonValue> {
-            match self {
-                Self::OnExport(res) => serde_json::to_value(res),
-                Self::Hover(res) => serde_json::to_value(res),
-                Self::GotoDefinition(res) => serde_json::to_value(res),
-                Self::GotoDeclaration(res) => serde_json::to_value(res),
-                Self::References(res) => serde_json::to_value(res),
-                Self::InlayHint(res) => serde_json::to_value(res),
-                Self::DocumentColor(res) => serde_json::to_value(res),
-                Self::DocumentLink(res) => serde_json::to_value(res),
-                Self::DocumentHighlight(res) => serde_json::to_value(res),
-                Self::ColorPresentation(res) => serde_json::to_value(res),
-                Self::CodeAction(res) => serde_json::to_value(res),
-                Self::CodeLens(res) => serde_json::to_value(res),
-                Self::Completion(res) => serde_json::to_value(res),
-                Self::SignatureHelp(res) => serde_json::to_value(res),
-                Self::PrepareRename(res) => serde_json::to_value(res),
-                Self::Rename(res) => serde_json::to_value(res),
-                Self::WillRenameFiles(res) => serde_json::to_value(res),
-                Self::DocumentSymbol(res) => serde_json::to_value(res),
-                Self::Symbol(res) => serde_json::to_value(res),
-                Self::WorkspaceLabel(res) => serde_json::to_value(res),
-                Self::SemanticTokensFull(res) => serde_json::to_value(res),
-                Self::SemanticTokensDelta(res) => serde_json::to_value(res),
-                Self::Formatting(res) => serde_json::to_value(res),
-                Self::FoldingRange(res) => serde_json::to_value(res),
-                Self::SelectionRange(res) => serde_json::to_value(res),
-                Self::InteractCodeContext(res) => serde_json::to_value(res),
-                Self::OnEnter(res) => serde_json::to_value(res),
-                Self::DocumentMetrics(res) => serde_json::to_value(res),
-                Self::ServerInfo(res) => serde_json::to_value(res),
-            }
-        }
     }
 }
 

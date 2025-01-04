@@ -18,6 +18,7 @@ import { wordCountItemProcess } from "./ui-extends";
 import { previewProcessOutline } from "./features/preview";
 
 interface ResourceRoutes {
+  "/fonts": any;
   "/symbols": any;
   "/preview/index.html": string;
   "/dir/package": string;
@@ -29,6 +30,61 @@ interface ResourceRoutes {
 
 /// kill the probe task after 60s
 const PROBE_TIMEOUT = 60_000;
+
+/**
+ * The result of starting a preview task.
+ */
+export interface PreviewResult {
+  /**
+   * The frontend address
+   */
+  staticServerAddr?: string;
+  /**
+   * The frontend port
+   */
+  staticServerPort?: number;
+  /**
+   * The data plane address
+   */
+  dataPlanePort?: number;
+  /**
+   * Whether the preview content is provided by the primary compiler instance. This must be indicate by the CLI argument `--not-primary`
+   * when starts a preview task by *LSP Command*.
+   *
+   * Context: If there is a only preview task, the (primary) compiler instance which is used by LSP is used.
+   * If there are multiple preview tasks, tinymist will spawn a new compiler instance for each additional task.
+   */
+  isPrimary?: boolean;
+}
+
+// That's very unfortunate that sourceScrollBySpan doesn't work well.
+export interface SourceScrollBySpanRequest {
+  event: "sourceScrollBySpan";
+  span: string;
+}
+
+export interface PanelScrollByPositionRequest {
+  event: "panelScrollByPosition";
+  position: any;
+}
+
+export interface PanelScrollOrCursorMoveRequest {
+  event: "panelScrollTo" | "changeCursorPosition";
+  filepath: string;
+  line: any;
+  character: any;
+}
+
+export type ScrollPreviewRequest =
+  | SourceScrollBySpanRequest
+  | PanelScrollByPositionRequest
+  | PanelScrollOrCursorMoveRequest;
+
+interface JumpInfo {
+  filepath: string;
+  start: [number, number] | null;
+  end: [number, number] | null;
+}
 
 class LanguageState {
   outputChannel: vscode.OutputChannel = vscode.window.createOutputChannel("Tinymist Typst", "log");
@@ -195,50 +251,7 @@ class LanguageState {
       wordCountItemProcess(params);
     });
 
-    interface JumpInfo {
-      filepath: string;
-      start: [number, number] | null;
-      end: [number, number] | null;
-    }
-    client.onNotification("tinymist/preview/scrollSource", async (jump: JumpInfo) => {
-      console.log(
-        "recv editorScrollTo request",
-        jump,
-        "active",
-        vscode.window.activeTextEditor !== undefined,
-        "documents",
-        vscode.workspace.textDocuments.map((doc) => doc.uri.fsPath),
-      );
-
-      if (jump.start === null || jump.end === null) {
-        return;
-      }
-
-      // open this file and show in editor
-      const doc =
-        vscode.workspace.textDocuments.find((doc) => doc.uri.fsPath === jump.filepath) ||
-        (await vscode.workspace.openTextDocument(jump.filepath));
-      const editor = await vscode.window.showTextDocument(doc, getSensibleTextEditorColumn());
-      const startPosition = new vscode.Position(jump.start[0], jump.start[1]);
-      const endPosition = new vscode.Position(jump.end[0], jump.end[1]);
-      const range = new vscode.Range(startPosition, endPosition);
-      editor.selection = new vscode.Selection(range.start, range.end);
-      editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
-    });
-
-    client.onNotification("tinymist/documentOutline", async (data: any) => {
-      previewProcessOutline(data);
-    });
-
-    client.onNotification("tinymist/preview/dispose", ({ taskId }) => {
-      const dispose = previewDisposes[taskId];
-      if (dispose) {
-        dispose();
-        delete previewDisposes[taskId];
-      } else {
-        console.warn("No dispose function found for task", taskId);
-      }
-    });
+    this.registerPreviewNotifications(client);
 
     await client.start();
 
@@ -276,6 +289,145 @@ class LanguageState {
       this.client.outputChannel.show();
     }
   }
+
+  /**
+   * The commands group for the *Document Preview* feature. This feature is used to preview multiple
+   * documents at the same time.
+   *
+   * A preview task is started by calling {@link startPreview} with the *CLI arguments* to pass to
+   * the preview task like you would do in the terminal. Although language server will stop a
+   * preview task when no connection is active for a while, it can be killed by calling
+   * {@link killPreview} with a task id of the preview task.
+   *
+   * The task id of a preview task is determined by the client. If no task id is provided, you
+   * cannot force kill a preview task from client. You also cannot have multiple preview tasks at
+   * the same time without specifying it.
+   *
+   * When a preview task is active, the client can request to scroll preview panel by the calling
+   * {@link scrollPreview}. The server will translate client requests and control the preview panel
+   * internally.
+   *
+   * Besides calling commands from the client to the server, a client must also handle notifications
+   * from the server. Please check body of {@link registerPreviewNotifications} for a list of them.
+   */
+  static _GroupDocumentPreviewFeatureCommands = null;
+
+  /**
+   * Starts a preview task. See {@link _GroupDocumentPreviewFeatureCommands} for more information.
+   *
+   * @param previewArgs - The *CLI arguments* to pass to the preview task. See help of the preview
+   * CLI command for more information.
+   * @returns The result of the preview task.
+   */
+  async startPreview(previewArgs: string[]): Promise<PreviewResult> {
+    const res = await tinymist.executeCommand<PreviewResult>(`tinymist.doStartPreview`, [
+      previewArgs,
+    ]);
+    return res || {};
+  }
+
+  /**
+   * Kills a preview task. See {@link _GroupDocumentPreviewFeatureCommands} for more information.
+   *
+   * @param taskId - The task ID of the preview task to kill.
+   */
+  async killPreview(taskId: string): Promise<void> {
+    return await tinymist.executeCommand(`tinymist.doKillPreview`, [taskId]);
+  }
+
+  /**
+   * Scrolls the preview to a specific position. See {@link _GroupDocumentPreviewFeatureCommands}
+   * for more information.
+   *
+   * @param taskId - The task ID of the preview task to scroll.
+   * @param req - The request to scroll to.
+   */
+  async scrollPreview(taskId: string, req: ScrollPreviewRequest): Promise<void> {
+    return await tinymist.executeCommand(`tinymist.scrollPreview`, [taskId, req]);
+  }
+
+  /**
+   * Registers the preview notifications receiving from the language server. See
+   * {@link _GroupDocumentPreviewFeatureCommands} for more information.
+   */
+  registerPreviewNotifications(client: LanguageClient) {
+    // (Required) The server requests to dispose (clean up) a preview task when it is no longer
+    // needed.
+    client.onNotification("tinymist/preview/dispose", ({ taskId }) => {
+      const dispose = previewDisposes[taskId];
+      if (dispose) {
+        dispose();
+        delete previewDisposes[taskId];
+      } else {
+        console.warn("No dispose function found for task", taskId);
+      }
+    });
+
+    // (Optional) The server requests to scroll the source code to a specific position
+    client.onNotification("tinymist/preview/scrollSource", async (jump: JumpInfo) => {
+      console.log(
+        "recv editorScrollTo request",
+        jump,
+        "active",
+        vscode.window.activeTextEditor !== undefined,
+        "documents",
+        vscode.workspace.textDocuments.map((doc) => doc.uri.fsPath),
+      );
+
+      if (jump.start === null || jump.end === null) {
+        return;
+      }
+
+      function inputHasUri(
+        input: unknown,
+      ): input is vscode.TabInputText | vscode.TabInputCustom | vscode.TabInputNotebook {
+        return (
+          input instanceof vscode.TabInputText ||
+          input instanceof vscode.TabInputCustom ||
+          input instanceof vscode.TabInputNotebook
+        );
+      }
+
+      // Resolve the affiliated column if it is already opened
+      let affiliatedColumn: vscode.ViewColumn | undefined = undefined;
+      for (const group of vscode.window.tabGroups.all) {
+        for (const tab of group.tabs) {
+          if (!tab || !inputHasUri(tab.input)) {
+            continue;
+          }
+
+          if (tab.input.uri.fsPath === jump.filepath) {
+            affiliatedColumn = group.viewColumn;
+            break;
+          }
+        }
+        if (affiliatedColumn !== undefined) {
+          break;
+        }
+      }
+
+      // open this file and show in editor
+      const doc =
+        vscode.workspace.textDocuments.find((doc) => doc.uri.fsPath === jump.filepath) ||
+        (await vscode.workspace.openTextDocument(jump.filepath));
+      const col = affiliatedColumn || getSensibleTextEditorColumn();
+      const editor = await vscode.window.showTextDocument(doc, col);
+      const startPosition = new vscode.Position(jump.start[0], jump.start[1]);
+      const endPosition = new vscode.Position(jump.end[0], jump.end[1]);
+      const range = new vscode.Range(startPosition, endPosition);
+      editor.selection = new vscode.Selection(range.start, range.end);
+      editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+    });
+
+    // (Optional) The server requests to update the document outline
+    client.onNotification("tinymist/documentOutline", async (data: any) => {
+      previewProcessOutline(data);
+    });
+  }
+
+  /**
+   * End of {@link _GroupDocumentPreviewFeatureCommands}
+   */
 
   /**
    * The code is borrowed from https://github.com/rust-lang/rust-analyzer/blob/fc98e0657abf3ce07eed513e38274c89bbb2f8ad/editors/code/src/config.ts#L98
@@ -364,9 +516,13 @@ class LanguageState {
       ];
     }
 
+    const wordPattern =
+      /(-?\d*.\d\w*)|([^\`\~\!\@\#\$\%\^\&\*\(\)\=\+\[\{\]\}\\\|\;\:\'\"\,\.<\>\/\?\s]+)/;
+
     console.log("Setting up language configuration", typingContinueCommentsOnNewline);
     this.configureLang = vscode.languages.setLanguageConfiguration("typst", {
       onEnterRules,
+      wordPattern,
     });
   }
 }

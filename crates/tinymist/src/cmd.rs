@@ -187,7 +187,7 @@ impl LanguageState {
         let range = opts
             .range
             .map(|r| {
-                tinymist_query::lsp_to_typst::range(r, self.const_config().position_encoding, &s)
+                tinymist_query::to_typst_range(r, self.const_config().position_encoding, &s)
                     .ok_or_else(|| internal_error("cannoet convert range"))
             })
             .transpose()?;
@@ -334,7 +334,7 @@ impl LanguageState {
 
     /// Initialize a new template.
     pub fn init_template(&mut self, mut args: Vec<JsonValue>) -> AnySchedulableResponse {
-        use crate::tool::package::{self, determine_latest_version, TemplateSource};
+        use crate::tool::package::{self, TemplateSource};
 
         #[derive(Debug, Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -359,7 +359,7 @@ impl LanguageState {
                     // Try to parse without version, but prefer the error message of the
                     // normal package spec parsing if it fails.
                     let spec: VersionlessPackageSpec = from_source.parse().map_err(|_| err)?;
-                    let version = determine_latest_version(&snap.world, &spec)?;
+                    let version = snap.world.registry.determine_latest_version(&spec)?;
                     StrResult::Ok(spec.at(version))
                 })
                 .map_err(map_string_err("failed to parse package spec"))
@@ -386,7 +386,7 @@ impl LanguageState {
 
     /// Get the entry of a template.
     pub fn get_template_entry(&mut self, mut args: Vec<JsonValue>) -> AnySchedulableResponse {
-        use crate::tool::package::{self, determine_latest_version, TemplateSource};
+        use crate::tool::package::{self, TemplateSource};
 
         let from_source = get_arg!(args[0] as String);
 
@@ -404,7 +404,7 @@ impl LanguageState {
                     // Try to parse without version, but prefer the error message of the
                     // normal package spec parsing if it fails.
                     let spec: VersionlessPackageSpec = from_source.parse().map_err(|_| err)?;
-                    let version = determine_latest_version(&snap.world, &spec)?;
+                    let version = snap.world.registry.determine_latest_version(&spec)?;
                     StrResult::Ok(spec.at(version))
                 })
                 .map_err(map_string_err("failed to parse package spec"))
@@ -437,7 +437,7 @@ impl LanguageState {
         #[serde(rename_all = "camelCase")]
         pub struct InteractCodeContextParams {
             pub text_document: TextDocumentIdentifier,
-            pub query: Vec<tinymist_query::InteractCodeContextQuery>,
+            pub query: Vec<Option<tinymist_query::InteractCodeContextQuery>>,
         }
 
         let params: InteractCodeContextParams = serde_json::from_value(queries)
@@ -456,7 +456,7 @@ impl LanguageState {
         let self_path = std::env::current_exe()
             .map_err(|e| internal_error(format!("Cannot get typst compiler {e}")))?;
 
-        let entry = self.config.compile.determine_entry(Some(path));
+        let entry = self.entry_resolver().resolve(Some(path));
 
         let snap = self.primary().snapshot().map_err(z_internal_error)?;
         let user_action = self.user_action;
@@ -524,6 +524,12 @@ impl LanguageState {
 }
 
 impl LanguageState {
+    /// Get the all valid fonts
+    pub fn resource_fonts(&mut self, _arguments: Vec<JsonValue>) -> AnySchedulableResponse {
+        let snapshot = self.primary().snapshot().map_err(z_internal_error)?;
+        just_future(Self::get_font_resources(snapshot))
+    }
+
     /// Get the all valid symbols
     pub fn resource_symbols(&mut self, _arguments: Vec<JsonValue>) -> AnySchedulableResponse {
         let snapshot = self.primary().snapshot().map_err(z_internal_error)?;
@@ -547,6 +553,7 @@ impl LanguageState {
         just_future(async move {
             let snap = snap.receive().await.map_err(z_internal_error)?;
             let paths = snap.world.registry.paths();
+            let paths = paths.iter().map(|p| p.as_ref()).collect::<Vec<_>>();
             serde_json::to_value(paths).map_err(|e| internal_error(e.to_string()))
         })
     }
@@ -559,12 +566,8 @@ impl LanguageState {
         let snap = self.primary().snapshot().map_err(z_internal_error)?;
         just_future(async move {
             let snap = snap.receive().await.map_err(z_internal_error)?;
-            let paths = snap
-                .world
-                .registry
-                .local_path()
-                .into_iter()
-                .collect::<Vec<_>>();
+            let paths = snap.world.registry.local_path();
+            let paths = paths.as_deref().into_iter().collect::<Vec<_>>();
             serde_json::to_value(paths).map_err(|e| internal_error(e.to_string()))
         })
     }
@@ -658,16 +661,16 @@ impl LanguageState {
 
         Ok(async move {
             let snap = fut.receive().await.map_err(z_internal_error)?;
-            let w = snap.world.as_ref();
+            let world = &snap.world;
 
             let entry: StrResult<EntryState> = Ok(()).and_then(|_| {
                 let toml_id = tinymist_query::package::get_manifest_id(&info)?;
-                let toml_path = w.path_for_id(toml_id)?;
+                let toml_path = world.path_for_id(toml_id)?;
                 let pkg_root = toml_path.parent().ok_or_else(|| {
                     eco_format!("cannot get package root (parent of {toml_path:?})")
                 })?;
 
-                let manifest = tinymist_query::package::get_manifest(w, toml_id)?;
+                let manifest = tinymist_query::package::get_manifest(world, toml_id)?;
                 let entry_point = toml_id.join(&manifest.package.entrypoint);
 
                 Ok(EntryState::new_rooted(pkg_root.into(), Some(entry_point)))

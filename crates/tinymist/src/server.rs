@@ -21,12 +21,12 @@ use request::{RegisterCapability, UnregisterCapability};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value as JsonValue};
 use sync_lsp::*;
-use task::{CacheTask, ExportUserConfig, FormatTask, FormatUserConfig, UserActionTask};
-use tinymist_query::PageSelection;
+use task::{CacheTask, ExportUserConfig, FormatTask, FormatterConfig, UserActionTask};
 use tinymist_query::{
-    lsp_to_typst, CompilerQueryRequest, CompilerQueryResponse, FoldRequestFeature,
+    to_typst_range, CompilerQueryRequest, CompilerQueryResponse, FoldRequestFeature,
     PositionEncoding, SyntaxRequest,
 };
+use tinymist_query::{EntryResolver, PageSelection};
 use tokio::sync::mpsc;
 use typst::{diag::FileResult, syntax::Source};
 
@@ -101,12 +101,7 @@ impl LanguageState {
         config: Config,
         editor_tx: mpsc::UnboundedSender<EditorRequest>,
     ) -> Self {
-        let const_config = &config.const_config;
-        let formatter = FormatTask::new(FormatUserConfig {
-            mode: config.formatter_mode,
-            width: config.formatter_print_width.unwrap_or(120),
-            position_encoding: const_config.position_encoding,
-        });
+        let formatter = FormatTask::new(config.formatter());
 
         Self {
             client: client.clone(),
@@ -163,6 +158,11 @@ impl LanguageState {
     /// Get the compile configuration.
     pub fn compile_config(&self) -> &CompileConfig {
         &self.config.compile
+    }
+
+    /// Get the entry resolver.
+    pub fn entry_resolver(&self) -> &EntryResolver {
+        &self.compile_config().entry_resolver
     }
 
     /// Get the primary compile server for those commands without task context.
@@ -253,6 +253,7 @@ impl LanguageState {
             .with_command_("tinymist.getWorkspaceLabels", State::get_workspace_labels)
             .with_command_("tinymist.getServerInfo", State::get_server_info)
             // resources
+            .with_resource("/fonts", State::resource_fonts)
             .with_resource("/symbols", State::resource_symbols)
             .with_resource("/preview/index.html", State::resource_preview_html)
             .with_resource("/tutorial", State::resource_tutoral)
@@ -560,9 +561,9 @@ impl LanguageState {
         }
 
         let new_formatter_config = self.config.formatter();
-        if config.formatter() != new_formatter_config {
-            let err =
-                self.enable_formatter_caps(new_formatter_config.mode != FormatterMode::Disable);
+        if !config.formatter().eq(&new_formatter_config) {
+            let enabled = !matches!(new_formatter_config.config, FormatterConfig::Disable);
+            let err = self.enable_formatter_caps(enabled);
             if let Err(err) = err {
                 error!("could not change formatter config: {err}");
             }
@@ -848,7 +849,7 @@ impl LanguageState {
     pub fn pin_entry(&mut self, new_entry: Option<ImmutPath>) -> Result<(), Error> {
         self.pinning = new_entry.is_some();
         let entry = new_entry
-            .or_else(|| self.config.compile.determine_default_entry_path())
+            .or_else(|| self.entry_resolver().resolve_default())
             .or_else(|| self.focusing.clone());
         self.do_change_entry(entry).map(|_| ())
     }
@@ -866,7 +867,7 @@ impl LanguageState {
     /// This is used for tracking activating document status if a client is not
     /// performing any focus command request.
     ///
-    /// See https://github.com/microsoft/language-server-protocol/issues/718
+    /// See <https://github.com/microsoft/language-server-protocol/issues/718>
     ///
     /// we do want to focus the file implicitly by `textDocument/diagnostic`
     /// (pullDiagnostics mode), as suggested by language-server-protocol#718,
@@ -971,7 +972,7 @@ impl LanguageState {
             let replacement = change.text;
             match change.range {
                 Some(lsp_range) => {
-                    let range = lsp_to_typst::range(lsp_range, position_encoding, &meta.content)
+                    let range = to_typst_range(lsp_range, position_encoding, &meta.content)
                         .expect("invalid range");
                     meta.content.edit(range, &replacement);
                 }
@@ -1023,7 +1024,6 @@ impl LanguageState {
         let primary = || self.primary();
         let is_pinning = self.pinning;
         just_ok(match query {
-            InteractCodeContext(req) => query_source!(self, InteractCodeContext, req)?,
             FoldingRange(req) => query_source!(self, FoldingRange, req)?,
             SelectionRange(req) => query_source!(self, SelectionRange, req)?,
             DocumentSymbol(req) => query_source!(self, DocumentSymbol, req)?,
@@ -1047,9 +1047,9 @@ impl LanguageState {
         let fut_stat = client.query_snapshot_with_stat(&query)?;
         let entry = query
             .associated_path()
-            .map(|path| client.config.determine_entry(Some(path.into())))
+            .map(|path| client.entry_resolver().resolve(Some(path.into())))
             .or_else(|| {
-                let root = client.config.determine_root(None)?;
+                let root = client.entry_resolver().root(None)?;
                 Some(EntryState::new_rooted(root, Some(*DETACHED_ENTRY)))
             });
 
@@ -1064,9 +1064,20 @@ impl LanguageState {
             }
             fut_stat.stat.snap();
 
+            if matches!(query, Completion(..)) {
+                // Prefetch the package index for completion.
+                if snap.world.registry.cached_index().is_none() {
+                    let registry = snap.world.registry.clone();
+                    tokio::spawn(async move {
+                        let _ = registry.download_index();
+                    });
+                }
+            }
+
             match query {
                 SemanticTokensFull(req) => snap.run_semantic(req, R::SemanticTokensFull),
                 SemanticTokensDelta(req) => snap.run_semantic(req, R::SemanticTokensDelta),
+                InteractCodeContext(req) => snap.run_semantic(req, R::InteractCodeContext),
                 Hover(req) => snap.run_stateful(req, R::Hover),
                 GotoDefinition(req) => snap.run_stateful(req, R::GotoDefinition),
                 GotoDeclaration(req) => snap.run_semantic(req, R::GotoDeclaration),

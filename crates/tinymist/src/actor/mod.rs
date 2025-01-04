@@ -28,7 +28,7 @@ use typ_server::{CompileServerActor, CompileServerOpts};
 impl LanguageState {
     /// Restart the primary server.
     pub fn restart_primary(&mut self) {
-        let entry = self.compile_config().determine_default_entry_path();
+        let entry = self.entry_resolver().resolve_default();
         self.restart_server("primary", entry);
     }
 
@@ -41,7 +41,7 @@ impl LanguageState {
     fn restart_server(&mut self, group: &str, entry: Option<ImmutPath>) {
         let server = self.server(
             group.to_owned(),
-            self.compile_config().determine_entry(entry),
+            self.entry_resolver().resolve(entry),
             self.compile_config().determine_inputs(),
             self.vfs_snapshot(),
         );
@@ -134,12 +134,16 @@ impl LanguageState {
         let compile_handle = handle.clone();
         let cache = self.cache.clone();
         let cert_path = self.compile_config().determine_certification_path();
+        let package = self.compile_config().determine_package_opts();
 
         self.client.handle.spawn_blocking(move || {
             // Create the world
             let font_resolver = font_resolver.wait().clone();
-            let verse = LspUniverseBuilder::build(entry_.clone(), font_resolver, inputs, cert_path)
-                .expect("incorrect options");
+            let package_registry =
+                LspUniverseBuilder::resolve_package(cert_path.clone(), Some(&package));
+            let verse =
+                LspUniverseBuilder::build(entry_.clone(), inputs, font_resolver, package_registry)
+                    .expect("incorrect options");
 
             // Create the actor
             let server = CompileServerActor::new_with(

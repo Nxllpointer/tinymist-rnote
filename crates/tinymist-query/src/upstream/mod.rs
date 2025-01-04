@@ -16,8 +16,6 @@ use typst::{
 
 mod tooltip;
 pub use tooltip::*;
-mod complete;
-pub use complete::*;
 
 /// Extract the first sentence of plain text of a piece of documentation.
 ///
@@ -25,20 +23,20 @@ pub use complete::*;
 pub fn plain_docs_sentence(docs: &str) -> EcoString {
     crate::log_debug_ct!("plain docs {docs:?}");
     let docs = docs.replace("```example", "```typ");
-    let mut s = unscanny::Scanner::new(&docs);
+    let mut scanner = unscanny::Scanner::new(&docs);
     let mut output = EcoString::new();
     let mut link = false;
-    while let Some(c) = s.eat() {
-        match c {
+    while let Some(ch) = scanner.eat() {
+        match ch {
             '`' => {
-                let mut raw = s.eat_until('`');
+                let mut raw = scanner.eat_until('`');
                 if (raw.starts_with('{') && raw.ends_with('}'))
                     || (raw.starts_with('[') && raw.ends_with(']'))
                 {
                     raw = &raw[1..raw.len() - 1];
                 }
 
-                s.eat();
+                scanner.eat();
                 output.push('`');
                 output.push_str(raw);
                 output.push('`');
@@ -49,11 +47,11 @@ pub fn plain_docs_sentence(docs: &str) -> EcoString {
             }
             ']' if link => {
                 output.push(']');
-                let c = s.cursor();
-                if s.eat_if('(') {
-                    s.eat_until(')');
-                    let link_content = s.from(c + 1);
-                    s.eat();
+                let cursor = scanner.cursor();
+                if scanner.eat_if('(') {
+                    scanner.eat_until(')');
+                    let link_content = scanner.from(cursor + 1);
+                    scanner.eat();
 
                     crate::log_debug_ct!("Intra Link: {link_content}");
                     let link = resolve(link_content, "https://typst.app/docs/").ok();
@@ -65,10 +63,10 @@ pub fn plain_docs_sentence(docs: &str) -> EcoString {
                     output.push('(');
                     output.push_str(&link);
                     output.push(')');
-                } else if s.eat_if('[') {
-                    s.eat_until(']');
-                    s.eat();
-                    output.push_str(s.from(c));
+                } else if scanner.eat_if('[') {
+                    scanner.eat_until(']');
+                    scanner.eat();
+                    output.push_str(scanner.from(cursor));
                 }
                 link = false
             }
@@ -77,7 +75,7 @@ pub fn plain_docs_sentence(docs: &str) -> EcoString {
             //     output.push('.');
             //     break;
             // }
-            _ => output.push(c),
+            _ => output.push(ch),
         }
     }
 
@@ -289,9 +287,9 @@ static ROUTE_MAPS: Lazy<HashMap<CatKey, String>> = Lazy::new(|| {
             let cat = cat.or_else(|| scope.get_category(name));
             let name = urlify(name);
             match value {
-                Value::Func(f) => {
+                Value::Func(func) => {
                     if let Some(cat) = cat {
-                        let Some(name) = f.name() else {
+                        let Some(name) = func.name() else {
                             continue;
                         };
 
@@ -304,11 +302,11 @@ static ROUTE_MAPS: Lazy<HashMap<CatKey, String>> = Lazy::new(|| {
                                 "reference/{}/{}/#functions-{name}",
                                 group.category, group.name
                             );
-                            map.insert(CatKey::Func(f.clone()), route);
+                            map.insert(CatKey::Func(func.clone()), route);
                             continue;
                         }
 
-                        crate::log_debug_ct!("func: {f:?} -> {cat:?}");
+                        crate::log_debug_ct!("func: {func:?} -> {cat:?}");
 
                         let route = if let Some(parent_name) = &parent_name {
                             format!("reference/{}/{parent_name}/#definitions-{name}", cat.name())
@@ -316,9 +314,9 @@ static ROUTE_MAPS: Lazy<HashMap<CatKey, String>> = Lazy::new(|| {
                             format!("reference/{}/{name}/", cat.name())
                         };
 
-                        map.insert(CatKey::Func(f.clone()), route);
+                        map.insert(CatKey::Func(func.clone()), route);
                     }
-                    if let Some(s) = f.scope() {
+                    if let Some(s) = func.scope() {
                         scope_to_finds.push((s, Some(name), cat));
                     }
                 }
@@ -349,19 +347,19 @@ static ROUTE_MAPS: Lazy<HashMap<CatKey, String>> = Lazy::new(|| {
 pub(crate) fn urlify(title: &str) -> EcoString {
     title
         .chars()
-        .map(|c| c.to_ascii_lowercase())
-        .map(|c| match c {
-            'a'..='z' | '0'..='9' => c,
+        .map(|ch| ch.to_ascii_lowercase())
+        .map(|ch| match ch {
+            'a'..='z' | '0'..='9' => ch,
             _ => '-',
         })
         .collect()
 }
 
-pub fn route_of_value(k: &Value) -> Option<&'static String> {
+pub fn route_of_value(val: &Value) -> Option<&'static String> {
     // ROUTE_MAPS.get(&CatKey::Func(k.clone()))
-    let key = match k {
-        Value::Func(f) => CatKey::Func(f.clone()),
-        Value::Type(t) => CatKey::Type(*t),
+    let key = match val {
+        Value::Func(func) => CatKey::Func(func.clone()),
+        Value::Type(ty) => CatKey::Type(*ty),
         _ => return None,
     };
 
@@ -369,7 +367,7 @@ pub fn route_of_value(k: &Value) -> Option<&'static String> {
 }
 
 /// Create a short description of a font family.
-fn summarize_font_family<'a>(variants: impl Iterator<Item = &'a FontInfo>) -> EcoString {
+pub fn summarize_font_family<'a>(variants: impl Iterator<Item = &'a FontInfo>) -> EcoString {
     let mut infos: Vec<_> = variants.collect();
     infos.sort_by_key(|info: &&FontInfo| info.variant);
 

@@ -17,7 +17,7 @@ pub struct ModuleDependency {
 /// Construct the module dependencies of the given context.
 ///
 /// It will scan all the files in the context, using
-/// [`AnalysisContext::source_files`], and find the dependencies and dependents
+/// [`LocalContext::source_files`], and find the dependencies and dependents
 /// of each file.
 pub fn construct_module_dependencies(
     ctx: &mut LocalContext,
@@ -123,15 +123,15 @@ pub(crate) fn scan_workspace_files<T>(
         if !de
             .path()
             .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| ext.is_match(e))
+            .and_then(|err| err.to_str())
+            .is_some_and(|err| ext.is_match(err))
         {
             continue;
         }
 
         let path = de.path();
         let relative_path = match path.strip_prefix(root) {
-            Ok(p) => p,
+            Ok(path) => path,
             Err(err) => {
                 log::warn!("failed to strip prefix, path: {path:?}, root: {root:?}: {err}");
                 continue;

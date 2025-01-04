@@ -1,6 +1,6 @@
 {
   "name": "tinymist",
-  "version": "0.12.6-rc1",
+  "version": "0.12.16",
   "description": "An integrated language service for Typst",
   "keywords": [
     "typst",
@@ -50,6 +50,11 @@
           "id": "tinymist.dev-kit",
           "name": "DevKit View",
           "when": "ext.tinymistActivated && ext.tinymistDevKit"
+        },
+        {
+          "id": "tinymist.tool-view",
+          "name": "Tool",
+          "when": "ext.tinymistActivated"
         },
         {
           "id": "tinymist.package-view",
@@ -302,6 +307,20 @@
             "null"
           ],
           "default": null
+        },
+        "tinymist.configureDefaultWordSeparator": {
+          "title": "Configure default word separators",
+          "description": "Whether to configure default word separators on startup",
+          "type": "string",
+          "default": "enable",
+          "enum": [
+            "enable",
+            "disable"
+          ],
+          "enumDescriptions": [
+            "Override the default word separators on startup",
+            "Do not override the default word separators on startup"
+          ]
         },
         "tinymist.semanticTokens": {
           "title": "Semantic tokens mode",
@@ -619,6 +638,14 @@
     "configurationDefaults": {
       "[typst]": {
         "editor.wordWrap": "on",
+        "editor.wordSeparators": "`~!@#$%^&*()=+[{]}\\|;:'\",.<>/?",
+        "editor.semanticHighlighting.enabled": true,
+        "editor.tabSize": 2,
+        "editor.inlayHints.enabled": "off"
+      },
+      "[typst-code]": {
+        "editor.wordWrap": "on",
+        "editor.wordSeparators": "`~!@#$%^&*()=+[{]}\\|;:'\",.<>/?",
         "editor.semanticHighlighting.enabled": true,
         "editor.tabSize": 2,
         "editor.inlayHints.enabled": "off"
@@ -939,7 +966,12 @@
       },
       {
         "command": "tinymist.showSymbolView",
-        "title": "Show symbol view",
+        "title": "Show Symbol View",
+        "category": "Typst"
+      },
+      {
+        "command": "tinymist.showFontView",
+        "title": "Show Font View",
         "category": "Typst"
       },
       {

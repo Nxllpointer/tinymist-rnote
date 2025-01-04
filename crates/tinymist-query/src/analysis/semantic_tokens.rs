@@ -54,7 +54,7 @@ impl SemanticTokenCache {
     /// Lock the token cache with an optional previous id in *main thread*.
     pub(crate) fn acquire(
         cache: Arc<Mutex<Self>>,
-        p: &Path,
+        path: &Path,
         prev: Option<&str>,
     ) -> SemanticTokenContext {
         let that = cache.clone();
@@ -70,7 +70,7 @@ impl SemanticTokenCache {
         });
         let next = NonZeroUsize::new(that.next_id).expect("id overflow");
 
-        let path = ImmutPath::from(p);
+        let path = ImmutPath::from(path);
         let manager = that.manager.entry(path.clone()).or_default();
         let _rev_lock = manager.lock(prev.unwrap_or(next));
         let prev = prev.and_then(|prev| {
@@ -389,7 +389,7 @@ impl Tokenizer {
             range,
         } = token;
 
-        use crate::typst_to_lsp;
+        use crate::lsp_typst_boundary;
         use lsp_types::Position;
         let utf8_start = range.start;
         if self.pos_offset > utf8_start {
@@ -404,7 +404,7 @@ impl Tokenizer {
             return;
         }
 
-        let position = typst_to_lsp::offset_to_position(utf8_start, self.encoding, &self.source);
+        let position = lsp_typst_boundary::to_lsp_position(utf8_start, self.encoding, &self.source);
 
         let delta = self.curr_pos.delta(&position);
 
@@ -601,9 +601,9 @@ fn token_from_node(
 fn token_from_ident(ei: &ExprInfo, ident: &LinkedNode, modifier: &mut ModifierSet) -> TokenType {
     let resolved = ei.resolves.get(&ident.span());
     let context = if let Some(resolved) = resolved {
-        match (&resolved.root, &resolved.val) {
-            (Some(e), t) => Some(token_from_decl_expr(e, t.as_ref(), modifier)),
-            (_, Some(t)) => Some(token_from_term(t, modifier)),
+        match (&resolved.root, &resolved.term) {
+            (Some(root), term) => Some(token_from_decl_expr(root, term.as_ref(), modifier)),
+            (_, Some(ty)) => Some(token_from_term(ty, modifier)),
             _ => None,
         }
     } else {
@@ -710,7 +710,7 @@ fn token_from_hashtag(
 ) -> Option<TokenType> {
     get_expr_following_hashtag(hashtag)
         .as_ref()
-        .and_then(|e| token_from_node(ei, e, modifier))
+        .and_then(|node| token_from_node(ei, node, modifier))
 }
 
 #[cfg(test)]

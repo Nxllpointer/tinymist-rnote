@@ -51,39 +51,39 @@ impl StatefulRequest for HoverRequest {
         let mut contents = match contents {
             HoverContents::Array(contents) => contents
                 .into_iter()
-                .map(|e| match e {
-                    MarkedString::LanguageString(e) => {
-                        format!("```{}\n{}\n```", e.language, e.value)
+                .map(|content| match content {
+                    MarkedString::LanguageString(content) => {
+                        format!("```{}\n{}\n```", content.language, content.value)
                     }
-                    MarkedString::String(e) => e,
+                    MarkedString::String(content) => content,
                 })
                 .join("\n\n---\n"),
             HoverContents::Scalar(MarkedString::String(contents)) => contents,
             HoverContents::Scalar(MarkedString::LanguageString(contents)) => {
                 format!("```{}\n{}\n```", contents.language, contents.value)
             }
-            lsp_types::HoverContents::Markup(e) => {
-                match e.kind {
-                    MarkupKind::Markdown => e.value,
+            lsp_types::HoverContents::Markup(content) => {
+                match content.kind {
+                    MarkupKind::Markdown => content.value,
                     // todo: escape
-                    MarkupKind::PlainText => e.value,
+                    MarkupKind::PlainText => content.value,
                 }
             }
         };
 
-        if let Some(p) = ctx.analysis.periscope.clone() {
+        if let Some(provider) = ctx.analysis.periscope.clone() {
             if let Some(doc) = doc.clone() {
                 let position = jump_from_cursor(&doc.document, &source, cursor);
                 let position = position.or_else(|| {
-                    for i in 1..100 {
-                        let next_cursor = cursor + i;
+                    for idx in 1..100 {
+                        let next_cursor = cursor + idx;
                         if next_cursor < source.text().len() {
                             let position = jump_from_cursor(&doc.document, &source, next_cursor);
                             if position.is_some() {
                                 return position;
                             }
                         }
-                        let prev_cursor = cursor.checked_sub(i);
+                        let prev_cursor = cursor.checked_sub(idx);
                         if let Some(prev_cursor) = prev_cursor {
                             let position = jump_from_cursor(&doc.document, &source, prev_cursor);
                             if position.is_some() {
@@ -96,7 +96,7 @@ impl StatefulRequest for HoverRequest {
                 });
 
                 log::info!("telescope position: {:?}", position);
-                let content = position.and_then(|pos| p.periscope_at(ctx, doc, pos));
+                let content = position.and_then(|pos| provider.periscope_at(ctx, doc, pos));
                 if let Some(preview_content) = content {
                     contents = format!("{preview_content}\n---\n{contents}");
                 }
@@ -117,8 +117,8 @@ fn def_tooltip(
     cursor: usize,
 ) -> Option<HoverContents> {
     let leaf = LinkedNode::new(source.root()).leaf_at_compat(cursor)?;
-    let deref_target = get_deref_target(leaf.clone(), cursor)?;
-    let def = ctx.def_of_syntax(source, document, deref_target.clone())?;
+    let syntax = classify_syntax(leaf.clone(), cursor)?;
+    let def = ctx.def_of_syntax(source, document, syntax.clone())?;
 
     let mut results = vec![];
     let mut actions = vec![];
@@ -128,9 +128,9 @@ fn def_tooltip(
         Label(..) => {
             results.push(MarkedString::String(format!("Label: {}\n", def.name())));
             // todo: type repr
-            if let Some(c) = def.term.as_ref().and_then(|v| v.value()) {
-                let c = truncated_repr(&c);
-                results.push(MarkedString::String(format!("{c}")));
+            if let Some(val) = def.term.as_ref().and_then(|v| v.value()) {
+                let repr = truncated_repr(&val);
+                results.push(MarkedString::String(format!("{repr}")));
             }
             Some(HoverContents::Array(results))
         }
@@ -147,7 +147,7 @@ fn def_tooltip(
 
             if matches!(def.decl.kind(), DefKind::Variable | DefKind::Constant) {
                 // todo: check sensible length, value highlighting
-                if let Some(values) = expr_tooltip(ctx.world(), deref_target.node()) {
+                if let Some(values) = expr_tooltip(ctx.world(), syntax.node()) {
                     match values {
                         Tooltip::Text(values) => {
                             results.push(MarkedString::String(values.into()));
@@ -216,7 +216,7 @@ fn star_tooltip(ctx: &mut LocalContext, mut node: &LinkedNode) -> Option<HoverCo
     }
 
     let import_node = node.cast::<ast::ModuleImport>()?;
-    let scope_val = ctx.analyze_import(import_node.source().to_untyped()).1?;
+    let scope_val = ctx.module_by_syntax(import_node.source().to_untyped())?;
 
     let scope_items = scope_val.scope()?.iter();
     let mut names = scope_items.map(|item| item.0.as_str()).collect::<Vec<_>>();

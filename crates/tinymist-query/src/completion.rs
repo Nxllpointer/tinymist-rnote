@@ -1,22 +1,10 @@
-use lsp_types::{
-    Command, CompletionItemLabelDetails, CompletionList, CompletionTextEdit, InsertTextFormat,
-    TextEdit,
-};
-use once_cell::sync::Lazy;
-use regex::{Captures, Regex};
-use typst_shim::syntax::LinkedNodeExt;
+use crate::analysis::{CompletionCursor, CompletionWorker};
+use crate::prelude::*;
 
-use crate::{
-    analysis::{BuiltinTy, InsTy, Ty},
-    prelude::*,
-    syntax::{is_ident_like, DerefTarget},
-    upstream::{autocomplete, complete_path, CompletionContext},
-    StatefulRequest,
-};
-
-pub(crate) type LspCompletion = lsp_types::CompletionItem;
-pub(crate) type LspCompletionKind = lsp_types::CompletionItemKind;
-pub(crate) type TypstCompletionKind = crate::upstream::CompletionKind;
+pub(crate) mod proto;
+pub use proto::*;
+pub(crate) mod snippet;
+pub use snippet::*;
 
 /// The [`textDocument/completion`] request is sent from the client to the
 /// server to compute completion items at a given cursor position.
@@ -51,7 +39,7 @@ pub struct CompletionRequest {
 }
 
 impl StatefulRequest for CompletionRequest {
-    type Response = CompletionResponse;
+    type Response = CompletionList;
 
     fn request(
         self,
@@ -66,10 +54,6 @@ impl StatefulRequest for CompletionRequest {
         {
             return None;
         }
-
-        let doc = doc.as_ref().map(|doc| doc.document.as_ref());
-        let source = ctx.source_by_path(&self.path).ok()?;
-        let (cursor, deref_target) = ctx.deref_syntax_at_(&source, self.position, 0)?;
 
         // Please see <https://github.com/nvarner/typst-lsp/commit/2d66f26fb96ceb8e485f492e5b81e9db25c3e8ec>
         //
@@ -86,261 +70,27 @@ impl StatefulRequest for CompletionRequest {
         // assume that the completion is not explicit.
         let explicit = false;
 
-        // Skip if is the let binding item *directly*
-        if let Some(DerefTarget::VarAccess(node)) = &deref_target {
-            match node.parent_kind() {
-                // complete the init part of the let binding
-                Some(SyntaxKind::LetBinding) => {
-                    let parent = node.parent()?;
-                    let parent_init = parent.cast::<ast::LetBinding>()?.init()?;
-                    let parent_init = parent.find(parent_init.span())?;
-                    parent_init.find(node.span())?;
-                }
-                Some(SyntaxKind::Closure) => return None,
-                _ => {}
-            }
-        }
+        let document = doc.as_ref().map(|doc| doc.document.as_ref());
+        let source = ctx.source_by_path(&self.path).ok()?;
+        let cursor = ctx.to_typst_pos_offset(&source, self.position, 0)?;
+        let mut cursor = CompletionCursor::new(ctx.shared_(), &source, cursor)?;
 
-        // Skip if an error node starts with number (e.g. `1pt`)
-        if matches!(
-            deref_target,
-            Some(DerefTarget::Callee(..) | DerefTarget::VarAccess(..) | DerefTarget::Normal(..),)
-        ) {
-            let node = LinkedNode::new(source.root()).leaf_at_compat(cursor)?;
-            if node.erroneous() {
-                let mut n = node.text().chars();
+        let mut worker = CompletionWorker::new(ctx, document, explicit, self.trigger_character)?;
+        worker.work(&mut cursor)?;
 
-                match n.next() {
-                    Some(c) if c.is_numeric() => return None,
-                    Some('.') => {
-                        if matches!(n.next(), Some(c) if c.is_numeric()) {
-                            return None;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-
-        // Do some completion specific to the deref target
-        let mut ident_like = None;
-        let mut completion_result = None;
-        let is_callee = matches!(deref_target, Some(DerefTarget::Callee(..)));
-        match deref_target {
-            Some(DerefTarget::Callee(..) | DerefTarget::VarAccess(..)) => {
-                let node = LinkedNode::new(source.root()).leaf_at_compat(cursor)?;
-                if is_ident_like(&node) {
-                    ident_like = Some(node);
-                }
-            }
-            Some(DerefTarget::ImportPath(v) | DerefTarget::IncludePath(v)) => {
-                if !v.text().starts_with(r#""@"#) {
-                    completion_result = complete_path(
-                        ctx,
-                        Some(v),
-                        &source,
-                        cursor,
-                        &crate::analysis::PathPreference::Source,
-                    );
-                }
-            }
-            Some(DerefTarget::Normal(SyntaxKind::Str, cano_expr)) => {
-                let parent = cano_expr.parent()?;
-                if matches!(parent.kind(), SyntaxKind::Named | SyntaxKind::Args) {
-                    let ty_chk = ctx.type_check(&source);
-
-                    let ty = ty_chk.type_of_span(cano_expr.span());
-                    crate::log_debug_ct!("check string ty: {ty:?}");
-                    if let Some(Ty::Builtin(BuiltinTy::Path(path_filter))) = ty {
-                        completion_result =
-                            complete_path(ctx, Some(cano_expr), &source, cursor, &path_filter);
-                    }
-                }
-            }
-            Some(DerefTarget::Label(..) | DerefTarget::Ref(..) | DerefTarget::Normal(..)) => {}
-            None => {}
-        }
-
-        let mut completion_items_rest = None;
-        let is_incomplete = false;
-
-        let mut items = completion_result.or_else(|| {
-            let mut cc_ctx = CompletionContext::new(
-                ctx,
-                doc,
-                &source,
-                cursor,
-                explicit,
-                self.trigger_character,
-            )?;
-
-            // Exclude it self from auto completion
-            // e.g. `#let x = (1.);`
-            let self_ty = cc_ctx.leaf.cast::<ast::Expr>().and_then(|exp| {
-                let v = cc_ctx.ctx.mini_eval(exp)?;
-                Some(Ty::Value(InsTy::new(v)))
-            });
-
-            if let Some(self_ty) = self_ty {
-                cc_ctx.seen_types.insert(self_ty);
-            };
-
-            let (offset, ic, mut completions, completions_items2) = autocomplete(cc_ctx)?;
-            if !completions_items2.is_empty() {
-                completion_items_rest = Some(completions_items2);
-            }
-            // todo: define it well, we were needing it because we wanted to do interactive
-            // path completion, but now we've scanned all the paths at the same time.
-            // is_incomplete = ic;
-            let _ = ic;
-
-            let replace_range;
-            if ident_like.as_ref().is_some_and(|i| i.offset() == offset) {
-                let ident_like = ident_like.unwrap();
-                let mut rng = ident_like.range();
-                let ident_prefix = source.text()[rng.start..cursor].to_string();
-
-                completions.retain(|c| {
-                    // c.label
-                    let mut prefix_matcher = c.label.chars();
-                    'ident_matching: for ch in ident_prefix.chars() {
-                        for c in prefix_matcher.by_ref() {
-                            if c == ch {
-                                continue 'ident_matching;
-                            }
-                        }
-
-                        return false;
-                    }
-
-                    true
-                });
-
-                // if modifying some arguments, we need to truncate and add a comma
-                if !is_callee && cursor != rng.end && is_arg_like_context(&ident_like) {
-                    // extend comma
-                    for c in completions.iter_mut() {
-                        let apply = match &mut c.apply {
-                            Some(w) => w,
-                            None => {
-                                c.apply = Some(c.label.clone());
-                                c.apply.as_mut().unwrap()
-                            }
-                        };
-                        if apply.trim_end().ends_with(',') {
-                            continue;
-                        }
-                        apply.push_str(", ");
-                    }
-
-                    // Truncate
-                    rng.end = cursor;
-                }
-
-                replace_range = ctx.to_lsp_range(rng, &source);
-            } else {
-                replace_range = ctx.to_lsp_range(offset..cursor, &source);
-            }
-
-            let completions = completions.iter().map(|typst_completion| {
-                let typst_snippet = typst_completion
-                    .apply
-                    .as_ref()
-                    .unwrap_or(&typst_completion.label);
-                let lsp_snippet = to_lsp_snippet(typst_snippet);
-                let text_edit = CompletionTextEdit::Edit(TextEdit::new(replace_range, lsp_snippet));
-
-                LspCompletion {
-                    label: typst_completion.label.to_string(),
-                    kind: Some(completion_kind(typst_completion.kind.clone())),
-                    detail: typst_completion.detail.as_ref().map(String::from),
-                    sort_text: typst_completion.sort_text.as_ref().map(String::from),
-                    filter_text: typst_completion.filter_text.as_ref().map(String::from),
-                    label_details: typst_completion.label_detail.as_ref().map(|e| {
-                        CompletionItemLabelDetails {
-                            detail: None,
-                            description: Some(e.to_string()),
-                        }
-                    }),
-                    text_edit: Some(text_edit),
-                    additional_text_edits: typst_completion.additional_text_edits.clone(),
-                    insert_text_format: Some(InsertTextFormat::SNIPPET),
-                    commit_characters: typst_completion
-                        .commit_char
-                        .as_ref()
-                        .map(|v| vec![v.to_string()]),
-                    command: typst_completion.command.as_ref().map(|c| Command {
-                        command: c.to_string(),
-                        ..Default::default()
-                    }),
-                    ..Default::default()
-                }
-            });
-
-            Some(completions.collect_vec())
-        })?;
-
-        if let Some(items_rest) = completion_items_rest.as_mut() {
-            items.append(items_rest);
-        }
+        // todo: define it well, we were needing it because we wanted to do interactive
+        // path completion, but now we've scanned all the paths at the same time.
+        // is_incomplete = ic;
+        let _ = worker.incomplete;
 
         // To response completions in fine-grained manner, we need to mark result as
         // incomplete. This follows what rust-analyzer does.
         // https://github.com/rust-lang/rust-analyzer/blob/f5a9250147f6569d8d89334dc9cca79c0322729f/crates/rust-analyzer/src/handlers/request.rs#L940C55-L940C75
-        Some(CompletionResponse::List(CompletionList {
-            is_incomplete,
-            items,
-        }))
+        Some(CompletionList {
+            is_incomplete: false,
+            items: worker.completions,
+        })
     }
-}
-
-pub(crate) fn completion_kind(typst_completion_kind: TypstCompletionKind) -> LspCompletionKind {
-    match typst_completion_kind {
-        TypstCompletionKind::Syntax => LspCompletionKind::SNIPPET,
-        TypstCompletionKind::Func => LspCompletionKind::FUNCTION,
-        TypstCompletionKind::Param => LspCompletionKind::VARIABLE,
-        TypstCompletionKind::Field => LspCompletionKind::FIELD,
-        TypstCompletionKind::Variable => LspCompletionKind::VARIABLE,
-        TypstCompletionKind::Constant => LspCompletionKind::CONSTANT,
-        TypstCompletionKind::Reference => LspCompletionKind::REFERENCE,
-        TypstCompletionKind::Symbol(_) => LspCompletionKind::FIELD,
-        TypstCompletionKind::Type => LspCompletionKind::CLASS,
-        TypstCompletionKind::Module => LspCompletionKind::MODULE,
-        TypstCompletionKind::File => LspCompletionKind::FILE,
-        TypstCompletionKind::Folder => LspCompletionKind::FOLDER,
-    }
-}
-
-static TYPST_SNIPPET_PLACEHOLDER_RE: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"\$\{(.*?)\}").unwrap());
-
-/// Adds numbering to placeholders in snippets
-fn to_lsp_snippet(typst_snippet: &EcoString) -> String {
-    let mut counter = 1;
-    let result =
-        TYPST_SNIPPET_PLACEHOLDER_RE.replace_all(typst_snippet.as_str(), |cap: &Captures| {
-            let substitution = format!("${{{}:{}}}", counter, &cap[1]);
-            counter += 1;
-            substitution
-        });
-
-    result.to_string()
-}
-
-fn is_arg_like_context(mut matching: &LinkedNode) -> bool {
-    while let Some(parent) = matching.parent() {
-        use SyntaxKind::*;
-
-        // todo: contextual
-        match parent.kind() {
-            ContentBlock | Equation | CodeBlock | Markup | Math | Code => return false,
-            Args | Params | Destructuring | Array | Dict => return true,
-            _ => {}
-        }
-
-        matching = parent;
-    }
-    false
 }
 
 #[cfg(test)]
@@ -348,16 +98,15 @@ mod tests {
     use std::collections::HashSet;
 
     use insta::with_settings;
-    use lsp_types::CompletionItem;
 
     use super::*;
-    use crate::{syntax::find_module_level_docs, tests::*};
+    use crate::{completion::proto::CompletionItem, syntax::find_module_level_docs, tests::*};
 
     struct TestConfig {
         pkg_mode: bool,
     }
 
-    fn run(c: TestConfig) -> impl Fn(&mut LocalContext, PathBuf) {
+    fn run(config: TestConfig) -> impl Fn(&mut LocalContext, PathBuf) {
         fn test(ctx: &mut LocalContext, id: TypstFileId) {
             let source = ctx.source_by_id(id).unwrap();
             let rng = find_test_range(&source);
@@ -425,13 +174,13 @@ mod tests {
                     explicit: false,
                     trigger_character,
                 };
-                results.push(request.request(ctx, doc.clone()).map(|resp| match resp {
-                    CompletionResponse::List(l) => CompletionResponse::List(CompletionList {
-                        is_incomplete: l.is_incomplete,
-                        items: get_items(l.items),
-                    }),
-                    CompletionResponse::Array(items) => CompletionResponse::Array(get_items(items)),
-                }));
+                let result = request
+                    .request(ctx, doc.clone())
+                    .map(|list| CompletionList {
+                        is_incomplete: list.is_incomplete,
+                        items: get_items(list.items),
+                    });
+                results.push(result);
             }
             with_settings!({
                 description => format!("Completion on {text} ({rng:?})"),
@@ -441,7 +190,7 @@ mod tests {
         }
 
         move |ctx, path| {
-            if c.pkg_mode {
+            if config.pkg_mode {
                 let files = ctx
                     .source_files()
                     .iter()

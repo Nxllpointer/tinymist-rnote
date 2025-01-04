@@ -33,7 +33,7 @@ impl SyntaxRequest for OnEnterRequest {
         position_encoding: PositionEncoding,
     ) -> Option<Self::Response> {
         let root = LinkedNode::new(source.root());
-        let rng = lsp_to_typst::range(self.range, position_encoding, source)?;
+        let rng = to_typst_range(self.range, position_encoding, source)?;
         let cursor = rng.end;
         let leaf = root.leaf_at_compat(cursor)?;
 
@@ -64,7 +64,7 @@ struct OnEnterWorker<'a> {
 impl OnEnterWorker<'_> {
     fn indent_of(&self, of: usize) -> String {
         let all_text = self.source.text();
-        let start = all_text[..of].rfind('\n').map(|e| e + 1);
+        let start = all_text[..of].rfind('\n').map(|lf_offset| lf_offset + 1);
         let indent_size = all_text[start.unwrap_or_default()..of].chars().count();
         " ".repeat(indent_size)
     }
@@ -87,14 +87,14 @@ impl OnEnterWorker<'_> {
             .children()
             .skip(leaf.index().saturating_sub(first_index))
             .take_while(skipper)
-            .filter(|e| matches!(e.kind(), SyntaxKind::LineComment))
+            .filter(|child| matches!(child.kind(), SyntaxKind::LineComment))
             .count();
 
         let comment_prefix = {
-            let mut p = unscanny::Scanner::new(leaf.text());
-            p.eat_while('/');
-            p.eat_if('!');
-            p.before()
+            let mut scanner = unscanny::Scanner::new(leaf.text());
+            scanner.eat_while('/');
+            scanner.eat_if('!');
+            scanner.before()
         };
 
         // Continuing single-line non-doc comments (like this one :) ) is annoying
@@ -106,7 +106,7 @@ impl OnEnterWorker<'_> {
         // todo: remove_trailing_whitespace
 
         let edit = TextEdit {
-            range: typst_to_lsp::range(rng, self.source, self.position_encoding),
+            range: to_lsp_range(rng, self.source, self.position_encoding),
             new_text: format!("\n{indent}{comment_prefix} $0"),
         };
 
@@ -132,7 +132,7 @@ impl OnEnterWorker<'_> {
 
         let indent = self.indent_of(o.start);
         let edit = TextEdit {
-            range: typst_to_lsp::range(rng, self.source, self.position_encoding),
+            range: to_lsp_range(rng, self.source, self.position_encoding),
             // todo: read indent configuration
             new_text: if !content.contains('\n') {
                 format!("\n{indent}  $0\n{indent}")

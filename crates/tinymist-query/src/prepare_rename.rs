@@ -1,7 +1,7 @@
 use crate::{
     analysis::Definition,
     prelude::*,
-    syntax::{Decl, DerefTarget},
+    syntax::{Decl, SyntaxClass},
 };
 
 /// The [`textDocument/prepareRename`] request is sent from the client to the
@@ -38,17 +38,17 @@ impl StatefulRequest for PrepareRenameRequest {
         doc: Option<VersionedDocument>,
     ) -> Option<Self::Response> {
         let source = ctx.source_by_path(&self.path).ok()?;
-        let deref_target = ctx.deref_syntax_at(&source, self.position, 1)?;
-        if matches!(deref_target.node().kind(), SyntaxKind::FieldAccess) {
+        let syntax = ctx.classify_pos(&source, self.position, 1)?;
+        if matches!(syntax.node().kind(), SyntaxKind::FieldAccess) {
             // todo: rename field access
             log::info!("prepare_rename: field access is not a definition site");
             return None;
         }
 
-        let origin_selection_range = ctx.to_lsp_range(deref_target.node().range(), &source);
-        let def = ctx.def_of_syntax(&source, doc.as_ref(), deref_target.clone())?;
+        let origin_selection_range = ctx.to_lsp_range(syntax.node().range(), &source);
+        let def = ctx.def_of_syntax(&source, doc.as_ref(), syntax.clone())?;
 
-        let (name, range) = prepare_renaming(ctx, &deref_target, &def)?;
+        let (name, range) = prepare_renaming(ctx, &syntax, &def)?;
 
         Some(PrepareRenameResponse::RangeWithPlaceholder {
             range: range.unwrap_or(origin_selection_range),
@@ -59,11 +59,11 @@ impl StatefulRequest for PrepareRenameRequest {
 
 pub(crate) fn prepare_renaming(
     ctx: &mut LocalContext,
-    deref_target: &DerefTarget,
+    deref_target: &SyntaxClass,
     def: &Definition,
 ) -> Option<(String, Option<LspRange>)> {
     let name = def.name().clone();
-    let (def_fid, _def_range) = def.def_at(ctx.shared()).clone()?;
+    let (def_fid, _def_range) = def.location(ctx.shared()).clone()?;
 
     if def_fid.package().is_some() {
         crate::log_debug_ct!(
@@ -105,9 +105,9 @@ pub(crate) fn prepare_renaming(
 fn validate_fn_renaming(def: &Definition) -> Option<()> {
     use typst::foundations::func::Repr;
     let value = def.value();
-    let mut f = match &value {
+    let mut func = match &value {
         None => return Some(()),
-        Some(Value::Func(f)) => f,
+        Some(Value::Func(func)) => func,
         Some(..) => {
             log::info!(
                 "prepare_rename: not a function on function definition site: {:?}",
@@ -117,9 +117,9 @@ fn validate_fn_renaming(def: &Definition) -> Option<()> {
         }
     };
     loop {
-        match f.inner() {
+        match func.inner() {
             // todo: rename with site
-            Repr::With(w) => f = &w.0,
+            Repr::With(w) => func = &w.0,
             Repr::Closure(..) => return Some(()),
             // native functions can't be renamed
             Repr::Native(..) | Repr::Element(..) => return None,

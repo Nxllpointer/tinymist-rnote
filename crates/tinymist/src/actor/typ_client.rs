@@ -33,8 +33,8 @@ use reflexo_typst::{
 use sync_lsp::{just_future, QueryFuture};
 use tinymist_query::{
     analysis::{Analysis, AnalysisRevLock, LocalContextGuard},
-    CompilerQueryRequest, CompilerQueryResponse, DiagnosticsMap, OnExportRequest, SemanticRequest,
-    ServerInfoResponse, StatefulRequest, VersionedDocument,
+    CompilerQueryRequest, CompilerQueryResponse, DiagnosticsMap, EntryResolver, OnExportRequest,
+    SemanticRequest, ServerInfoResponse, StatefulRequest, VersionedDocument,
 };
 use tokio::sync::{mpsc, oneshot};
 use typst::{diag::SourceDiagnostic, World};
@@ -287,6 +287,11 @@ impl CompileClientActor {
         self.handle.clone().snapshot()
     }
 
+    /// Get the entry resolver.
+    pub fn entry_resolver(&self) -> &EntryResolver {
+        &self.config.entry_resolver
+    }
+
     /// Snapshot the compiler thread for language queries
     pub fn query_snapshot(&self) -> ZResult<QuerySnapFut> {
         self.handle.clone().query_snapshot(None)
@@ -321,8 +326,8 @@ impl CompileClientActor {
         let OnExportRequest { path, kind, open } = req;
         let snap = self.snapshot()?;
 
-        let entry = self.config.determine_entry(Some(path.as_path().into()));
-        let export = self.handle.export.oneshot(snap, Some(entry), kind);
+        let entry = self.entry_resolver().resolve(Some(path.as_path().into()));
+        let export = self.handle.export.factory.oneshot(snap, Some(entry), kind);
         just_future(async move {
             let res = export.await?;
 
@@ -369,7 +374,7 @@ impl CompileClientActor {
             return Err(error_once!("entry file must be absolute", path: path.unwrap().display()));
         }
 
-        let next_entry = self.config.determine_entry(path);
+        let next_entry = self.entry_resolver().resolve(path);
         if next_entry == self.entry {
             return Ok(false);
         }
@@ -497,17 +502,17 @@ impl QuerySnap {
     }
 
     pub fn run_analysis<T>(self, f: impl FnOnce(&mut LocalContextGuard) -> T) -> anyhow::Result<T> {
-        let w = self.world.as_ref();
-        let Some(main) = w.main_id() else {
+        let world = self.snap.world;
+        let Some(main) = world.main_id() else {
             error!("TypstActor: main file is not set");
             bail!("main file is not set");
         };
-        w.source(main).map_err(|err| {
+        world.source(main).map_err(|err| {
             info!("TypstActor: failed to prepare main file: {err:?}");
             anyhow::anyhow!("failed to get source: {err}")
         })?;
 
-        let mut analysis = self.analysis.snapshot_(w.clone(), self.rev_lock);
+        let mut analysis = self.analysis.snapshot_(world, self.rev_lock);
         Ok(f(&mut analysis))
     }
 }

@@ -1,17 +1,18 @@
 [workspace.package]
 description = "An integrated language service for Typst."
 authors = ["Myriad-Dreamin <camiyoru@gmail.com>", "Nathan Varner"]
-version = "0.12.6-rc1"
+version = "0.12.16"
 edition = "2021"
 readme = "README.md"
 license = "Apache-2.0"
 homepage = "https://github.com/Myriad-Dreamin/tinymist"
 repository = "https://github.com/Myriad-Dreamin/tinymist"
-rust-version = "1.80"
+# also change in ci.yml
+rust-version = "1.82"
 
 [workspace]
 resolver = "2"
-members = ["crates/*", "contrib/typlite", "tests"]
+members = ["crates/*", "tests"]
 
 [workspace.dependencies]
 
@@ -31,12 +32,12 @@ triomphe = { version = "0.1.10", default-features = false, features = ["std"] }
 async-trait = "0.1.77"
 futures = "0.3"
 rayon = "1.10.0"
-tokio = { version = "1.36.0", features = [
+tokio = { version = "1.42.0", features = [
     "macros",
     "rt-multi-thread",
     "io-std",
 ] }
-tokio-util = { version = "0.7.10", features = ["compat"] }
+tokio-util = { version = "0.7.13", features = ["compat"] }
 
 # System
 open = { version = "5.1.3" }
@@ -48,7 +49,7 @@ dirs = "5"
 # Networking
 hyper = { version = "1", features = ["full"] }
 hyper-util = { version = "0.1.7", features = ["tokio"] }
-hyper-tungstenite = "0.14.0"
+hyper-tungstenite = "0.15.0"
 
 # Algorithms
 base64 = "0.22"
@@ -65,14 +66,14 @@ ena = "0.14.2"
 hashbrown = { version = "0.14", features = [
     "inline-more",
 ], default-features = false }
-indexmap = "2.1.0"
+indexmap = "2.7.0"
 rpds = "1"
 
 # Data/Text Format and Processing
-biblatex = "0.9"
+biblatex = "0.10"
 pathdiff = "0.2"
 percent-encoding = "2"
-rust_iso639 = "0.0.1"
+rust_iso639 = "0.0.3"
 rust_iso3166 = "0.1.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -81,10 +82,10 @@ toml = { version = "0.8", default-features = false, features = [
     "parse",
     "display",
 ] }
-ttf-parser = "0.20.0"
+ttf-parser = "0.24.1"
 unicode-script = "0.5"
 unscanny = "0.1"
-yaml-rust2 = "0.8"
+yaml-rust2 = "0.9"
 
 # Logging
 codespan-reporting = "0.11"
@@ -92,15 +93,15 @@ env_logger = "0.11.3"
 log = "0.4"
 
 # Typst
-reflexo = { version = "0.5.0-rc9", default-features = false, features = [ # Marker to cause merge conflicts on version bump
+reflexo = { version = "=0.5.1", default-features = false, features = [
     "flat-vector",
 ] }
-reflexo-world = { version = "0.5.0-rc9", features = ["system"] }
-reflexo-typst = { version = "0.5.0-rc9", features = [
+reflexo-world = { version = "=0.5.1", features = ["system"] }
+reflexo-typst = { version = "=0.5.1", features = [
     "system",
 ], default-features = false }
-reflexo-vec2svg = { version = "0.5.0-rc9" }
-reflexo-typst-shim = { version = "0.5.0-rc9", features = ["nightly"] }
+reflexo-vec2svg = { version = "=0.5.1" }
+reflexo-typst-shim = { version = "=0.5.1", features = ["nightly"] }
 
 
 typst = "0.12.0" # Marker to cause merge conflicts on version bump
@@ -110,8 +111,9 @@ typst-render = "0.12.0"
 typst-pdf = "0.12.0"
 typst-syntax = "0.12.0"
 typst-assets = "0.12.0"
-typstfmt_lib = { git = "https://github.com/astrale-sharp/typstfmt", tag = "0.2.7" }
-typstyle = { version = "0.12.5", default-features = false }
+typstfmt = { git = "https://github.com/Myriad-Dreamin/typstfmt", tag = "v0.12.1" }
+typst-ansi-hl = "0.3.0"
+typstyle-core = { version = "=0.12.13", default-features = false }
 typlite = { path = "./crates/typlite" }
 typst-shim = { path = "./crates/typst-shim", features = ["nightly"] }
 
@@ -144,7 +146,7 @@ insta = { version = "1.39", features = ["glob"] }
 
 # Our Own Crates
 typst-preview = { path = "./crates/typst-preview" }
-tinymist-assets = { version = "0.12.6-rc1" }
+tinymist-assets = { version = "0.12.16" }
 tinymist = { path = "./crates/tinymist/" }
 tinymist-derive = { path = "./crates/tinymist-derive/" }
 tinymist-analysis = { path = "./crates/tinymist-analysis/" }
@@ -167,13 +169,20 @@ panic = "abort"   # Abort on panic
 inherits = "release"
 debug = true
 
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
+
 [workspace.lints.rust]
 missing_docs = "warn"
+# missing_crate_level_docs = "warn"
 
 [workspace.lints.clippy]
 uninlined_format_args = "warn"
 # missing_errors_doc = "warn"
 # missing_panics_doc = "warn"
+# missing_docs_in_private_items = "warn"
 missing_safety_doc = "warn"
 undocumented_unsafe_blocks = "warn"
 
@@ -187,10 +196,15 @@ withs = "withs"
 
 [workspace.metadata.typos.files]
 ignore-hidden = false
-extend-exclude = ["/.git", "fixtures", "upstream"]
+extend-exclude = ["/.git", "fixtures"]
 
 [patch.crates-io]
 
+# This patch is used to bundle a locally built frontend (HTML) of `typst-preview`.
+# The shortcoming is that you cannot install tinymist from git source then, i.e. `cargo install --git ..`, with this patch.
+# However, it is not suggested to install it in that way. The suggested ways are: 
+# - Installation: https://github.com/Myriad-Dreamin/tinymist?tab=readme-ov-file#installation
+# - Installing pre-built artifacts from GitHub : https://github.com/Myriad-Dreamin/tinymist?tab=readme-ov-file#installing-regularnightly-prebuilds-from-github
 # tinymist-assets = { path = "./crates/tinymist-assets/" }
 
 typst = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
@@ -204,12 +218,24 @@ typst-svg = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c
 typst-syntax = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
 typst-timing = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
 typst-utils = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
-reflexo = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "033038df80a5896616f18de23be7098da76bd3cc" }
-reflexo-world = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "033038df80a5896616f18de23be7098da76bd3cc" }
-reflexo-typst = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "033038df80a5896616f18de23be7098da76bd3cc" }
-reflexo-vec2svg = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "033038df80a5896616f18de23be7098da76bd3cc" }
-reflexo-typst-shim = { git = "https://github.com/Nxllpointer/typst.ts", rev = "033038df80a5896616f18de23be7098da76bd3cc" }
+reflexo = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "03b6c47867f62c229fcb5eebaa8a590d62aec7d8" }
+reflexo-world = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "03b6c47867f62c229fcb5eebaa8a590d62aec7d8" }
+reflexo-typst = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "03b6c47867f62c229fcb5eebaa8a590d62aec7d8" }
+reflexo-typst2vec = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "03b6c47867f62c229fcb5eebaa8a590d62aec7d8" }
+reflexo-vec2svg = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "03b6c47867f62c229fcb5eebaa8a590d62aec7d8" }
+reflexo-typst-shim = { git = "https://github.com/Nxllpointer/typst.ts", rev = "03b6c47867f62c229fcb5eebaa8a590d62aec7d8" }
 
+# These patches use a different version of `typst`, which only exports some private functions and information for code analysis.
+#
+# A regular build MUST use `tag` or `rev` to specify the version of the patched crate to ensure stability.
+# typst = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.12.0" }
+# typst-timing = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.12.0" }
+# typst-svg = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.12.0" }
+# typst-render = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.12.0" }
+# typst-pdf = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.12.0" }
+# typst-syntax = { git = "https://github.com/Myriad-Dreamin/typst.git", tag = "tinymist-v0.12.0" }
+
+# These patches use local `typst` for development.
 # typst = { path = "../typst/crates/typst" }
 # typst-timing = { path = "../typst/crates/typst-timing" }
 # typst-svg = { path = "../typst/crates/typst-svg" }
@@ -217,13 +243,17 @@ reflexo-typst-shim = { git = "https://github.com/Nxllpointer/typst.ts", rev = "0
 # typst-render = { path = "../typst/crates/typst-render" }
 # typst-syntax = { path = "../typst/crates/typst-syntax" }
 
-# reflexo = { git = "https://github.com/Myriad-Dreamin/typst.ts/", rev = "26e2eaa3696845a178df3266edc0019c77396414" }
-# world = { git = "https://github.com/Myriad-Dreamin/typst.ts/", rev = "26e2eaa3696845a178df3266edc0019c77396414" }
-# typst = { git = "https://github.com/Myriad-Dreamin/typst.ts/", rev = "26e2eaa3696845a178df3266edc0019c77396414" }
-# typst2vec = { git = "https://github.com/Myriad-Dreamin/typst.ts/", rev = "26e2eaa3696845a178df3266edc0019c77396414" }
-# vec2svg = { git = "https://github.com/Myriad-Dreamin/typst.ts/", rev = "26e2eaa3696845a178df3266edc0019c77396414" }
-# shim = { git = "https://github.com/Myriad-Dreamin/typst.ts/", rev = "26e2eaa3696845a178df3266edc0019c77396414" }
+# These patches use a different version of `reflexo`.
+#
+# A regular build MUST use `tag` or `rev` to specify the version of the patched crate to ensure stability.
+# reflexo = { git = "https://github.com/Myriad-Dreamin/typst.ts/", rev = "1b6e29c650ad6d3095e5ea18d93a2428c1ae77b9" }
+# reflexo-world = { git = "https://github.com/Myriad-Dreamin/typst.ts/", rev = "1b6e29c650ad6d3095e5ea18d93a2428c1ae77b9" }
+# reflexo-typst = { git = "https://github.com/Myriad-Dreamin/typst.ts/", rev = "1b6e29c650ad6d3095e5ea18d93a2428c1ae77b9" }
+# reflexo-typst2vec = { git = "https://github.com/Myriad-Dreamin/typst.ts/", rev = "1b6e29c650ad6d3095e5ea18d93a2428c1ae77b9" }
+# reflexo-vec2svg = { git = "https://github.com/Myriad-Dreamin/typst.ts/", rev = "1b6e29c650ad6d3095e5ea18d93a2428c1ae77b9" }
+# reflexo-typst-shim = { git = "https://github.com/Myriad-Dreamin/typst.ts/", rev = "1b6e29c650ad6d3095e5ea18d93a2428c1ae77b9" }
 
+# These patches use local `reflexo` for development.
 # reflexo = { path = "../typst.ts/crates/reflexo/" }
 # reflexo-world = { path = "../typst.ts/crates/reflexo-world/" }
 # reflexo-typst = { path = "../typst.ts/crates/reflexo-typst/" }

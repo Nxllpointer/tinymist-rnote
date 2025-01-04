@@ -14,7 +14,7 @@ use crate::{
     find_references,
     prelude::*,
     prepare_renaming,
-    syntax::{deref_expr, get_index_info, node_ancestors, Decl, DerefTarget, RefExpr},
+    syntax::{first_ancestor_expr, get_index_info, node_ancestors, Decl, RefExpr, SyntaxClass},
     ty::Interned,
 };
 
@@ -42,15 +42,15 @@ impl StatefulRequest for RenameRequest {
         doc: Option<VersionedDocument>,
     ) -> Option<Self::Response> {
         let source = ctx.source_by_path(&self.path).ok()?;
-        let deref_target = ctx.deref_syntax_at(&source, self.position, 1)?;
+        let syntax = ctx.classify_pos(&source, self.position, 1)?;
 
-        let def = ctx.def_of_syntax(&source, doc.as_ref(), deref_target.clone())?;
+        let def = ctx.def_of_syntax(&source, doc.as_ref(), syntax.clone())?;
 
-        prepare_renaming(ctx, &deref_target, &def)?;
+        prepare_renaming(ctx, &syntax, &def)?;
 
-        match deref_target {
+        match syntax {
             // todo: abs path
-            DerefTarget::ImportPath(path) | DerefTarget::IncludePath(path) => {
+            SyntaxClass::ImportPath(path) | SyntaxClass::IncludePath(path) => {
                 let ref_path_str = path.cast::<ast::Str>()?.get();
                 let new_path_str = if !self.new_name.ends_with(".typ") {
                     self.new_name + ".typ"
@@ -58,7 +58,7 @@ impl StatefulRequest for RenameRequest {
                     self.new_name
                 };
 
-                let def_fid = def.def_at(ctx.shared())?.0;
+                let def_fid = def.location(ctx.shared())?.0;
                 let old_path = ctx.path_for_id(def_fid).ok()?;
 
                 let rename_loc = Path::new(ref_path_str.as_str());
@@ -94,13 +94,13 @@ impl StatefulRequest for RenameRequest {
                 })
             }
             _ => {
-                let references = find_references(ctx, &source, doc.as_ref(), deref_target)?;
+                let references = find_references(ctx, &source, doc.as_ref(), syntax)?;
 
                 let mut edits = HashMap::new();
 
-                for i in references {
-                    let uri = i.uri;
-                    let range = i.range;
+                for loc in references {
+                    let uri = loc.uri;
+                    let range = loc.range;
                     let edits = edits.entry(uri).or_insert_with(Vec::new);
                     edits.push(TextEdit {
                         range,
@@ -212,7 +212,9 @@ impl RenameFileWorker<'_> {
         let root = LinkedNode::new(ref_src.root());
         let edits = edits.entry(uri).or_default();
         for obj in &link_info.objects {
-            if !matches!(obj.target, LinkTarget::Path(..)) {
+            if !matches!(&obj.target,
+                LinkTarget::Path(file_id, _) if *file_id == self.def_fid
+            ) {
                 continue;
             }
             if let Some(edit) = self.rename_resource_path(obj, &root, &ref_src) {
@@ -236,20 +238,21 @@ impl RenameFileWorker<'_> {
     fn rename_module_path(&mut self, span: Span, r: &RefExpr, src: &Source) -> Option<TextEdit> {
         let importing = r.root.as_ref()?.file_id();
 
-        if importing.map_or(true, |i| i != self.def_fid) {
+        if importing.map_or(true, |fid| fid != self.def_fid) {
             return None;
         }
         crate::log_debug_ct!("import: {span:?} -> {importing:?} v.s. {:?}", self.def_fid);
         // rename_importer(self.ctx, &ref_src, *span, &self.diff, edits);
 
         let root = LinkedNode::new(src.root());
-        let import_node = root.find(span).and_then(deref_expr)?;
+        let import_node = root.find(span).and_then(first_ancestor_expr)?;
         let (import_path, has_path_var) = node_ancestors(&import_node).find_map(|import_node| {
             match import_node.cast::<ast::Expr>()? {
-                ast::Expr::Import(i) => {
-                    Some((i.source(), i.new_name().is_none() && i.imports().is_none()))
-                }
-                ast::Expr::Include(i) => Some((i.source(), false)),
+                ast::Expr::Import(import) => Some((
+                    import.source(),
+                    import.new_name().is_none() && import.imports().is_none(),
+                )),
+                ast::Expr::Include(include) => Some((include.source(), false)),
                 _ => None,
             }
         })?;

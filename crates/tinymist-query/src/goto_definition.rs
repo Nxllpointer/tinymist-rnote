@@ -7,7 +7,7 @@ use crate::prelude::*;
 ///
 /// # Compatibility
 ///
-/// The [`GotoDefinitionResponse::Link`](lsp_types::GotoDefinitionResponse::Link) return value
+/// The [`GotoDefinitionResponse::Link`] return value
 /// was introduced in specification version 3.14.0 and requires client-side
 /// support in order to be used. It can be returned if the client set the
 /// following field to `true` in the `initialize` method:
@@ -32,12 +32,12 @@ impl StatefulRequest for GotoDefinitionRequest {
         doc: Option<VersionedDocument>,
     ) -> Option<Self::Response> {
         let source = ctx.source_by_path(&self.path).ok()?;
-        let deref_target = ctx.deref_syntax_at(&source, self.position, 1)?;
-        let origin_selection_range = ctx.to_lsp_range(deref_target.node().range(), &source);
+        let syntax = ctx.classify_pos(&source, self.position, 1)?;
+        let origin_selection_range = ctx.to_lsp_range(syntax.node().range(), &source);
 
-        let def = ctx.def_of_syntax(&source, doc.as_ref(), deref_target)?;
+        let def = ctx.def_of_syntax(&source, doc.as_ref(), syntax)?;
 
-        let (fid, def_range) = def.def_at(ctx.shared())?;
+        let (fid, def_range) = def.location(ctx.shared())?;
         let uri = ctx.uri_for_id(fid).ok()?;
         let range = ctx.to_lsp_range_(def_range, fid)?;
 
