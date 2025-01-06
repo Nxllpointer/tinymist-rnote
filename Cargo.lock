@@ -3737,6 +3737,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "pollster"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
+dependencies = [
+ "pollster-macro",
+]
+
+[[package]]
+name = "pollster-macro"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ac5da421106a50887c5b51d20806867db377fbb86bacf478ee0500a912e0c113"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.90",
+]
+
+[[package]]
 name = "poppler-rs"
 version = "0.24.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4154,7 +4174,7 @@ dependencies = [
 [[package]]
 name = "reflexo"
 version = "0.5.1"
-source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=03b6c47867f62c229fcb5eebaa8a590d62aec7d8#03b6c47867f62c229fcb5eebaa8a590d62aec7d8"
+source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=350f53e1a13fb2657ab8fce8201ee1f2018d72b4#350f53e1a13fb2657ab8fce8201ee1f2018d72b4"
 dependencies = [
  "base64",
  "bitvec",
@@ -4179,7 +4199,7 @@ dependencies = [
 [[package]]
 name = "reflexo-typst"
 version = "0.5.1"
-source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=03b6c47867f62c229fcb5eebaa8a590d62aec7d8#03b6c47867f62c229fcb5eebaa8a590d62aec7d8"
+source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=350f53e1a13fb2657ab8fce8201ee1f2018d72b4#350f53e1a13fb2657ab8fce8201ee1f2018d72b4"
 dependencies = [
  "codespan-reporting",
  "comemo",
@@ -4207,7 +4227,7 @@ dependencies = [
 [[package]]
 name = "reflexo-typst-shim"
 version = "0.5.1"
-source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=03b6c47867f62c229fcb5eebaa8a590d62aec7d8#03b6c47867f62c229fcb5eebaa8a590d62aec7d8"
+source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=350f53e1a13fb2657ab8fce8201ee1f2018d72b4#350f53e1a13fb2657ab8fce8201ee1f2018d72b4"
 dependencies = [
  "cfg-if",
  "typst",
@@ -4217,7 +4237,7 @@ dependencies = [
 [[package]]
 name = "reflexo-typst2vec"
 version = "0.5.1"
-source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=03b6c47867f62c229fcb5eebaa8a590d62aec7d8#03b6c47867f62c229fcb5eebaa8a590d62aec7d8"
+source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=350f53e1a13fb2657ab8fce8201ee1f2018d72b4#350f53e1a13fb2657ab8fce8201ee1f2018d72b4"
 dependencies = [
  "bitvec",
  "comemo",
@@ -4242,7 +4262,7 @@ dependencies = [
 [[package]]
 name = "reflexo-vec2svg"
 version = "0.5.1"
-source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=03b6c47867f62c229fcb5eebaa8a590d62aec7d8#03b6c47867f62c229fcb5eebaa8a590d62aec7d8"
+source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=350f53e1a13fb2657ab8fce8201ee1f2018d72b4#350f53e1a13fb2657ab8fce8201ee1f2018d72b4"
 dependencies = [
  "base64",
  "comemo",
@@ -4255,7 +4275,7 @@ dependencies = [
 [[package]]
 name = "reflexo-vfs"
 version = "0.5.1"
-source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=03b6c47867f62c229fcb5eebaa8a590d62aec7d8#03b6c47867f62c229fcb5eebaa8a590d62aec7d8"
+source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=350f53e1a13fb2657ab8fce8201ee1f2018d72b4#350f53e1a13fb2657ab8fce8201ee1f2018d72b4"
 dependencies = [
  "indexmap 2.7.0",
  "log",
@@ -4269,7 +4289,7 @@ dependencies = [
 [[package]]
 name = "reflexo-world"
 version = "0.5.1"
-source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=03b6c47867f62c229fcb5eebaa8a590d62aec7d8#03b6c47867f62c229fcb5eebaa8a590d62aec7d8"
+source = "git+https://github.com/Nxllpointer/typst.ts.git?rev=350f53e1a13fb2657ab8fce8201ee1f2018d72b4#350f53e1a13fb2657ab8fce8201ee1f2018d72b4"
 dependencies = [
  "chrono",
  "codespan-reporting",
@@ -6057,7 +6077,7 @@ dependencies = [
 [[package]]
 name = "typst"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=274002ea5babd082b9d2e9fe5700031296673078#274002ea5babd082b9d2e9fe5700031296673078"
 dependencies = [
  "arrayvec 0.7.6",
  "az",
@@ -6088,6 +6108,7 @@ dependencies = [
  "palette",
  "phf 0.11.2",
  "png",
+ "pollster",
  "portable-atomic",
  "qcms",
  "rayon",
@@ -6104,7 +6125,6 @@ dependencies = [
  "stacker",
  "syntect",
  "time",
- "tokio",
  "toml",
  "ttf-parser",
  "two-face",
@@ -6147,7 +6167,7 @@ checksum = "4fe00da1b24da2c4a7da532fc33d0c3bd43a902ca4c408ee2c36eabe70f2f4ba"
 [[package]]
 name = "typst-macros"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=274002ea5babd082b9d2e9fe5700031296673078#274002ea5babd082b9d2e9fe5700031296673078"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -6158,7 +6178,7 @@ dependencies = [
 [[package]]
 name = "typst-pdf"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=274002ea5babd082b9d2e9fe5700031296673078#274002ea5babd082b9d2e9fe5700031296673078"
 dependencies = [
  "arrayvec 0.7.6",
  "base64",
@@ -6206,7 +6226,7 @@ dependencies = [
 [[package]]
 name = "typst-render"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=274002ea5babd082b9d2e9fe5700031296673078#274002ea5babd082b9d2e9fe5700031296673078"
 dependencies = [
  "bytemuck",
  "comemo",
@@ -6234,7 +6254,7 @@ dependencies = [
 [[package]]
 name = "typst-svg"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=274002ea5babd082b9d2e9fe5700031296673078#274002ea5babd082b9d2e9fe5700031296673078"
 dependencies = [
  "base64",
  "comemo",
@@ -6251,7 +6271,7 @@ dependencies = [
 [[package]]
 name = "typst-syntax"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=274002ea5babd082b9d2e9fe5700031296673078#274002ea5babd082b9d2e9fe5700031296673078"
 dependencies = [
  "ecow",
  "once_cell",
@@ -6268,7 +6288,7 @@ dependencies = [
 [[package]]
 name = "typst-timing"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=274002ea5babd082b9d2e9fe5700031296673078#274002ea5babd082b9d2e9fe5700031296673078"
 dependencies = [
  "parking_lot",
  "serde",
@@ -6279,7 +6299,7 @@ dependencies = [
 [[package]]
 name = "typst-utils"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=274002ea5babd082b9d2e9fe5700031296673078#274002ea5babd082b9d2e9fe5700031296673078"
 dependencies = [
  "once_cell",
  "portable-atomic",
@@ -7350,14 +7370,14 @@ dependencies = [
 [[patch.unused]]
 name = "typst-cli"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=274002ea5babd082b9d2e9fe5700031296673078#274002ea5babd082b9d2e9fe5700031296673078"
 
 [[patch.unused]]
 name = "typst-ide"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=274002ea5babd082b9d2e9fe5700031296673078#274002ea5babd082b9d2e9fe5700031296673078"
 
 [[patch.unused]]
 name = "typst-kit"
 version = "0.12.0"
-source = "git+https://github.com/Nxllpointer/typst.git?rev=f4433015c0b09d1a2512dde368bf2e19d9369c41#f4433015c0b09d1a2512dde368bf2e19d9369c41"
+source = "git+https://github.com/Nxllpointer/typst.git?rev=274002ea5babd082b9d2e9fe5700031296673078#274002ea5babd082b9d2e9fe5700031296673078"

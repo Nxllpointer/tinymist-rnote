@@ -207,23 +207,23 @@ extend-exclude = ["/.git", "fixtures"]
 # - Installing pre-built artifacts from GitHub : https://github.com/Myriad-Dreamin/tinymist?tab=readme-ov-file#installing-regularnightly-prebuilds-from-github
 # tinymist-assets = { path = "./crates/tinymist-assets/" }
 
-typst = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
-typst-kit = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
-typst-cli = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
-typst-ide = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
-typst-macros = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
-typst-pdf = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
-typst-render = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
-typst-svg = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
-typst-syntax = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
-typst-timing = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
-typst-utils = { git = "https://github.com/Nxllpointer/typst.git", rev = "f4433015c0b09d1a2512dde368bf2e19d9369c41" }
-reflexo = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "03b6c47867f62c229fcb5eebaa8a590d62aec7d8" }
-reflexo-world = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "03b6c47867f62c229fcb5eebaa8a590d62aec7d8" }
-reflexo-typst = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "03b6c47867f62c229fcb5eebaa8a590d62aec7d8" }
-reflexo-typst2vec = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "03b6c47867f62c229fcb5eebaa8a590d62aec7d8" }
-reflexo-vec2svg = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "03b6c47867f62c229fcb5eebaa8a590d62aec7d8" }
-reflexo-typst-shim = { git = "https://github.com/Nxllpointer/typst.ts", rev = "03b6c47867f62c229fcb5eebaa8a590d62aec7d8" }
+typst = { git = "https://github.com/Nxllpointer/typst.git", rev = "274002ea5babd082b9d2e9fe5700031296673078" }
+typst-kit = { git = "https://github.com/Nxllpointer/typst.git", rev = "274002ea5babd082b9d2e9fe5700031296673078" }
+typst-cli = { git = "https://github.com/Nxllpointer/typst.git", rev = "274002ea5babd082b9d2e9fe5700031296673078" }
+typst-ide = { git = "https://github.com/Nxllpointer/typst.git", rev = "274002ea5babd082b9d2e9fe5700031296673078" }
+typst-macros = { git = "https://github.com/Nxllpointer/typst.git", rev = "274002ea5babd082b9d2e9fe5700031296673078" }
+typst-pdf = { git = "https://github.com/Nxllpointer/typst.git", rev = "274002ea5babd082b9d2e9fe5700031296673078" }
+typst-render = { git = "https://github.com/Nxllpointer/typst.git", rev = "274002ea5babd082b9d2e9fe5700031296673078" }
+typst-svg = { git = "https://github.com/Nxllpointer/typst.git", rev = "274002ea5babd082b9d2e9fe5700031296673078" }
+typst-syntax = { git = "https://github.com/Nxllpointer/typst.git", rev = "274002ea5babd082b9d2e9fe5700031296673078" }
+typst-timing = { git = "https://github.com/Nxllpointer/typst.git", rev = "274002ea5babd082b9d2e9fe5700031296673078" }
+typst-utils = { git = "https://github.com/Nxllpointer/typst.git", rev = "274002ea5babd082b9d2e9fe5700031296673078" }
+reflexo = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "350f53e1a13fb2657ab8fce8201ee1f2018d72b4" }
+reflexo-world = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "350f53e1a13fb2657ab8fce8201ee1f2018d72b4" }
+reflexo-typst = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "350f53e1a13fb2657ab8fce8201ee1f2018d72b4" }
+reflexo-typst2vec = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "350f53e1a13fb2657ab8fce8201ee1f2018d72b4" }
+reflexo-vec2svg = { git = "https://github.com/Nxllpointer/typst.ts.git", rev = "350f53e1a13fb2657ab8fce8201ee1f2018d72b4" }
+reflexo-typst-shim = { git = "https://github.com/Nxllpointer/typst.ts", rev = "350f53e1a13fb2657ab8fce8201ee1f2018d72b4" }
 
 # These patches use a different version of `typst`, which only exports some private functions and information for code analysis.
 #
